@@ -818,4 +818,287 @@ export class BlackboxAnalyzer {
     
     return correlations;
   }
+  /**
+ * Parses uploaded file and extracts blackbox data
+ * @param {File} file - Uploaded file
+ * @returns {Promise<Object>} - Parsed blackbox data
+ */
+/**
+ * Доданий метод для розбору файлу Blackbox
+ * @param {File} file - Завантажений файл
+ * @returns {Promise<Object>} - Розібрані дані Blackbox
+ */
+static async parseFile(file) {
+    console.log("Початок аналізу файлу:", file.name);
+    
+    try {
+      // Визначення типу файлу на основі розширення
+      const fileType = file.name.split('.').pop().toLowerCase();
+      
+      // Зчитуємо вміст файлу
+      const fileContent = await file.arrayBuffer();
+      
+      // Парсимо відповідно до типу файлу
+      if (fileType === 'bbl') {
+        // Обробка бінарних BBL-файлів
+        const { BBLParser } = await import('./BBLParser');
+        return BBLParser.parseBuffer(fileContent);
+      } else if (fileType === 'csv' || fileType === 'txt' || fileType === 'log') {
+        // Обробка текстових логів
+        const text = new TextDecoder().decode(fileContent);
+        
+        try {
+          const { DirectBetaflightParser } = await import('./DirectBetaflightParser');
+          return DirectBetaflightParser.parseLog(text);
+        } catch (error) {
+          console.warn("Помилка при використанні DirectBetaflightParser:", error);
+          
+          // Спроба використати альтернативний парсер
+          const { BetaflightLogParser } = await import('./BetaflightLogParser');
+          return BetaflightLogParser.parseLog(text);
+        }
+      } else {
+        // Невідомий тип файлу, спробуємо як текст
+        const text = new TextDecoder().decode(fileContent);
+        
+        try {
+          const { DirectBetaflightParser } = await import('./DirectBetaflightParser');
+          return DirectBetaflightParser.parseLog(text);
+        } catch (error) {
+          // Якщо не вдалося, спробуємо як бінарний файл
+          const { BBLParser } = await import('./BBLParser');
+          return BBLParser.parseBuffer(fileContent);
+        }
+      }
+    } catch (error) {
+      console.error("Помилка при розборі файлу:", error);
+      
+      // Створюємо демо-дані для тестування
+      return {
+        type: 'demo',
+        data: this.generateDemoData(100),
+        headers: {
+          'Product': 'Betaflight (Demo)',
+          'Firmware revision': 'Demo Mode',
+          'Craft name': 'Demo Drone'
+        }
+      };
+    }
+  }
+  
+  /**
+   * Генерує демо-дані для тестування при відсутності файлу
+   * @param {number} count - Кількість точок даних
+   * @returns {Array} - Масив демо-даних
+   */
+  static generateDemoData(count = 100) {
+    const data = [];
+    
+    for (let i = 0; i < count; i++) {
+      const t = i / 10; // Час у секундах
+      
+      // Синусоїдальні коливання для імітації даних
+      const sin1 = Math.sin(t * 5);
+      const sin2 = Math.sin(t * 10 + 1);
+      const sin3 = Math.sin(t * 3 + 2);
+      
+      data.push({
+        time: i * 10,
+        loopIteration: i,
+        gyroX: sin1 * 20,
+        gyroY: sin2 * 25,
+        gyroZ: sin3 * 15,
+        pidP: Math.abs(sin1 * 30),
+        pidI: Math.abs(sin2 * 20),
+        pidD: Math.abs(sin3 * 15),
+        motor0: 1000 + sin1 * 400 + 400,
+        motor1: 1000 + sin2 * 400 + 400,
+        motor2: 1000 + sin3 * 400 + 400,
+        motor3: 1000 + sin1 * sin2 * 400 + 400
+      });
+    }
+    
+    return data;
+  }
+  
+  /**
+   * Генерує рекомендації на основі результатів аналізу
+   * @param {Object} analysisResult - Результати аналізу даних
+   * @returns {Object} - Рекомендації для PID та фільтрів
+   */
+  static generateRecommendations(analysisResult) {
+    console.log("Генерація рекомендацій на основі аналізу даних");
+    
+    try {
+      // Якщо аналіз вже містить рекомендації, повертаємо їх
+      if (analysisResult.recommendations) {
+        return analysisResult.recommendations;
+      }
+      
+      // Розробляємо рекомендації на основі аналізу FFT та метрик
+      const noiseLevel = analysisResult.fftAnalysis?.noiseLevel || 0;
+      
+      // Коригуємо рекомендації на основі рівня шуму
+      let noiseFactor = 1.0;
+      if (noiseLevel > 50) {
+        noiseFactor = 0.8; // Зменшуємо коефіцієнти для високого шуму
+      } else if (noiseLevel > 20) {
+        noiseFactor = 0.9; // Незначне зменшення для середнього шуму
+      }
+      
+      // Базові рекомендації для PID
+      const pidRecommendations = {
+        roll: {
+          P: Math.round(45 * noiseFactor), 
+          I: Math.round(80 * noiseFactor), 
+          D: Math.round(30 * noiseFactor)
+        },
+        pitch: {
+          P: Math.round(45 * noiseFactor), 
+          I: Math.round(80 * noiseFactor), 
+          D: Math.round(30 * noiseFactor)
+        },
+        yaw: {
+          P: Math.round(40 * noiseFactor), 
+          I: Math.round(80 * noiseFactor), 
+          D: 0
+        },
+        feedforward: {
+          roll: 40,
+          pitch: 40,
+          yaw: 20,
+          transition: 20,
+          boost: 15
+        },
+        notes: []
+      };
+      
+      // Аналіз рівня шуму для приміток
+      if (noiseLevel > 50) {
+        pidRecommendations.notes.push("Виявлено високий рівень шуму. Рекомендується перевірити баланс пропелерів та кріплення FC.");
+      } else if (noiseLevel > 20) {
+        pidRecommendations.notes.push("Виявлено середній рівень шуму. PID-значення оптимізовані для зменшення шуму.");
+      } else {
+        pidRecommendations.notes.push("Низький рівень шуму. Можна використовувати більш агресивні налаштування PID за бажанням.");
+      }
+      
+      // Рекомендації для фільтрів
+      const filterRecommendations = {
+        gyro: {
+          lowpass_type: "PT1",
+          lowpass_hz: Math.max(80, Math.round(120 * noiseFactor))
+        },
+        dterm: {
+          lowpass_type: "PT1",
+          lowpass_hz: Math.max(60, Math.round(100 * noiseFactor))
+        },
+        dynamic_notch: {
+          enabled: 1,
+          q: 250,
+          min_hz: 80,
+          max_hz: 500
+        },
+        rpm_filter: {
+          enabled: 1,
+          harmonics: 3,
+          q: 500,
+          min_hz: 80
+        },
+        notes: []
+      };
+      
+      // Примітки щодо фільтрів
+      if (noiseLevel > 50) {
+        filterRecommendations.notes.push("Рекомендовано збільшити фільтрацію для зменшення високого шуму.");
+      }
+      
+      filterRecommendations.notes.push("Для кращих результатів рекомендується активувати RPM-фільтр, якщо ваші ESC підтримують telemetry.");
+      
+      // Команди CLI для налаштування
+      const pidCommands = [
+        "# PID Settings",
+        `set pid_roll_p = ${pidRecommendations.roll.P}`,
+        `set pid_roll_i = ${pidRecommendations.roll.I}`,
+        `set pid_roll_d = ${pidRecommendations.roll.D}`,
+        `set pid_pitch_p = ${pidRecommendations.pitch.P}`,
+        `set pid_pitch_i = ${pidRecommendations.pitch.I}`,
+        `set pid_pitch_d = ${pidRecommendations.pitch.D}`,
+        `set pid_yaw_p = ${pidRecommendations.yaw.P}`,
+        `set pid_yaw_i = ${pidRecommendations.yaw.I}`,
+        `set pid_yaw_d = ${pidRecommendations.yaw.D}`,
+        "",
+        "# Feed-forward Settings",
+        `set feed_forward_roll = ${pidRecommendations.feedforward.roll}`,
+        `set feed_forward_pitch = ${pidRecommendations.feedforward.pitch}`,
+        `set feed_forward_yaw = ${pidRecommendations.feedforward.yaw}`
+      ];
+      
+      const filterCommands = [
+        "",
+        "# Filter Settings",
+        `set gyro_lowpass_type = ${filterRecommendations.gyro.lowpass_type}`,
+        `set gyro_lowpass_hz = ${filterRecommendations.gyro.lowpass_hz}`,
+        `set dterm_lowpass_type = ${filterRecommendations.dterm.lowpass_type}`,
+        `set dterm_lowpass_hz = ${filterRecommendations.dterm.lowpass_hz}`,
+        `set dyn_notch_enable = ON`,
+        `set dyn_notch_q = ${filterRecommendations.dynamic_notch.q}`,
+        `set dyn_notch_min_hz = ${filterRecommendations.dynamic_notch.min_hz}`,
+        `set dyn_notch_max_hz = ${filterRecommendations.dynamic_notch.max_hz}`,
+        "",
+        "# Save Settings",
+        "save"
+      ];
+      
+      const fullCommandSet = [...pidCommands, ...filterCommands];
+      
+      return {
+        pid: pidRecommendations,
+        filters: filterRecommendations,
+        fullCommandSet: fullCommandSet
+      };
+    } catch (error) {
+      console.error("Помилка генерації рекомендацій:", error);
+      
+      // Значення за замовчуванням у випадку помилки
+      return {
+        pid: {
+          roll: { P: 45, I: 80, D: 30 },
+          pitch: { P: 45, I: 80, D: 30 },
+          yaw: { P: 40, I: 80, D: 0 },
+          feedforward: {
+            roll: 40,
+            pitch: 40,
+            yaw: 20,
+            transition: 20,
+            boost: 15
+          },
+          notes: ["Використано значення за замовчуванням"]
+        },
+        filters: {
+          gyro: { lowpass_type: "PT1", lowpass_hz: 120 },
+          dterm: { lowpass_type: "PT1", lowpass_hz: 100 },
+          dynamic_notch: { enabled: 1, q: 250, min_hz: 80, max_hz: 500 },
+          rpm_filter: { enabled: 1, harmonics: 3, q: 500, min_hz: 80 },
+          notes: ["Використано значення за замовчуванням"]
+        },
+        fullCommandSet: [
+          "# PID Settings",
+          "set pid_roll_p = 45",
+          "set pid_roll_i = 80",
+          "set pid_roll_d = 30",
+          "set pid_pitch_p = 45",
+          "set pid_pitch_i = 80",
+          "set pid_pitch_d = 30",
+          "set pid_yaw_p = 40",
+          "set pid_yaw_i = 80",
+          "set pid_yaw_d = 0",
+          "",
+          "# Filter Settings",
+          "set gyro_lowpass_type = PT1",
+          "set gyro_lowpass_hz = 120",
+          "save"
+        ]
+      };
+    }
+  }
 }
