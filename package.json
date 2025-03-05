@@ -11,7 +11,10 @@
   "dependencies": {
     "@tailwindcss/vite": "^4.0.9",
     "chart.js": "^4.4.0",
+    "fftjs": "^0.0.4",
     "lodash": "^4.17.21",
+    "ml-matrix-peaks-finder": "^1.0.0",
+    "ml-savitzky-golay": "^5.0.0",
     "papaparse": "^5.4.1",
     "react": "^18.2.0",
     "react-chartjs-2": "^5.2.0",

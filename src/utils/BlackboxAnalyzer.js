@@ -2,7 +2,7 @@ import Papa from 'papaparse'
 import _ from 'lodash'
 import { BlackboxBinaryAdapter } from './BlackboxBinaryAdapter'
 import { DirectBetaflightParser } from './DirectBetaflightParser'
-
+import { ZieglerNicholsTuner } from './ZieglerNicholsTuner';
 export class BlackboxAnalyzer {
   /**
    * Parse the blackbox log file and extract the data
@@ -319,30 +319,30 @@ export class BlackboxAnalyzer {
    */
   static analyzeData(blackboxData) {
     // Extract and organize the data for analysis
-    let data = []
+    let data = [];
     
     if (blackboxData.type === 'csv' || blackboxData.type === 'betaflight') {
-      data = blackboxData.data
+      data = blackboxData.data;
     } else if (blackboxData.type === 'blackbox' || blackboxData.type === 'binary' || blackboxData.type === 'demo') {
-      data = blackboxData.data
+      data = blackboxData.data;
     } else {
-      throw new Error('Невідомий формат даних')
+      throw new Error('Невідомий формат даних');
     }
     
     // Ensure we have enough data points for analysis
     if (data.length < 10) {
-      throw new Error(`Недостатньо точок даних для аналізу. Знайдено ${data.length}, потрібно щонайменше 10.`)
+      throw new Error(`Недостатньо точок даних для аналізу. Знайдено ${data.length}, потрібно щонайменше 10.`);
     }
     
     // Якщо даних менше 100, додаємо попередження
     const limitedDataAnalysis = data.length < 100 ? 
       "Увага: Кількість точок даних менше 100. Результати аналізу можуть бути менш точними." : 
       "";
-
+  
     console.log(`Аналізуємо ${data.length} точок даних`);
     
     // Extract time series data
-    const timeData = data.map(d => d.time || 0)
+    const timeData = data.map(d => d.time || 0);
     
     // Extract gyro data
     const gyroData = {
@@ -350,7 +350,7 @@ export class BlackboxAnalyzer {
       x: data.map(d => d.gyroX || 0),
       y: data.map(d => d.gyroY || 0),
       z: data.map(d => d.gyroZ || 0)
-    }
+    };
     
     // Extract PID data
     const pidData = {
@@ -358,7 +358,7 @@ export class BlackboxAnalyzer {
       p: data.map(d => d.pidP || 0),
       i: data.map(d => d.pidI || 0),
       d: data.map(d => d.pidD || 0)
-    }
+    };
     
     // Extract motor data
     const motorData = {
@@ -367,7 +367,7 @@ export class BlackboxAnalyzer {
       motor1: data.map(d => d.motor1 || 0),
       motor2: data.map(d => d.motor2 || 0),
       motor3: data.map(d => d.motor3 || 0)
-    }
+    };
     
     // Extract RC command data
     const rcData = {
@@ -376,20 +376,48 @@ export class BlackboxAnalyzer {
       pitch: data.map(d => d.rcPitch || 0),
       yaw: data.map(d => d.rcYaw || 0),
       throttle: data.map(d => d.rcThrottle || 0)
-    }
+    };
     
     // Extract battery data
     const batteryData = {
       time: timeData,
       voltage: data.map(d => d.vbat || 0),
       current: data.map(d => d.current || 0)
+    };
+  
+    // НОВИЙ КОД: FFT аналіз
+    let fftAnalysis = { resonanceFrequencies: [], dominantFrequency: 0 };
+    try {
+      const fftAnalyzer = new FFTAnalyzer();
+      // Використовуємо гіроскоп по осі X для аналізу
+      const gyroXData = gyroData.x.filter(x => !isNaN(x));
+      
+      // Вираховуємо частоту дискретизації (оцінка на основі часових даних)
+      let sampleRate = 1000; // За замовчуванням 1кГц
+      if (timeData.length > 2) {
+        const timeDiffs = [];
+        for (let i = 1; i < timeData.length; i++) {
+          const diff = timeData[i] - timeData[i-1];
+          if (diff > 0) timeDiffs.push(diff);
+        }
+        
+        if (timeDiffs.length > 0) {
+          const avgTimeDiff = timeDiffs.reduce((a, b) => a + b, 0) / timeDiffs.length;
+          sampleRate = Math.round(1000 / avgTimeDiff); // Конвертуємо в Гц
+        }
+      }
+      
+      fftAnalysis = fftAnalyzer.analyzeGyroData(gyroXData, sampleRate);
+      console.log("FFT аналіз завершено. Знайдено домінантну частоту:", fftAnalysis.dominantFrequency);
+    } catch (error) {
+      console.error("Помилка при виконанні FFT аналізу:", error);
     }
-
+    
     // Calculate metrics
-    const metrics = this.calculateMetrics(gyroData, pidData, motorData)
+    const metrics = this.calculateMetrics(gyroData, pidData, motorData, fftAnalysis);
     
     // Analyze the data for insights
-    const analysis = this.generateAnalysis(gyroData, pidData, motorData, rcData, metrics)
+    const analysis = this.generateAnalysis(gyroData, pidData, motorData, rcData, metrics, fftAnalysis);
     
     // Додаємо попередження до результатів аналізу, якщо потрібно
     const result = {
@@ -399,7 +427,8 @@ export class BlackboxAnalyzer {
       batteryData,
       rcData,
       metrics,
-      analysis
+      analysis,
+      fftAnalysis,
     };
     
     if (limitedDataAnalysis) {
@@ -415,6 +444,314 @@ export class BlackboxAnalyzer {
     
     console.log("Аналіз даних завершено успішно");
     return result;
+  }
+  
+  // Оновлений метод calculateMetrics, що включає дані FFT аналізу
+  static calculateMetrics(gyroData, pidData, motorData, fftAnalysis = {}) {
+    // Calculate standard deviation of gyro data as a measure of noise
+    const gyroXStdDev = this.calculateStandardDeviation(gyroData.x);
+    const gyroYStdDev = this.calculateStandardDeviation(gyroData.y);
+    const gyroZStdDev = this.calculateStandardDeviation(gyroData.z);
+    
+    // Calculate PID error (simplified - in a real implementation this would be more complex)
+    const pidErrorX = this.calculateRMSE(gyroData.x, pidData.p);
+    const pidErrorY = this.calculateRMSE(gyroData.y, pidData.p);
+    const pidErrorZ = this.calculateRMSE(gyroData.z, pidData.p);
+    
+    // Calculate motor balance/deviation
+    const motorVariance = this.calculateVariance([
+      ...motorData.motor0,
+      ...motorData.motor1,
+      ...motorData.motor2,
+      ...motorData.motor3
+    ]);
+    
+    // Calculate gyro response time (simplified)
+    const gyroResponseTime = this.estimateResponseTime(gyroData.x, pidData.p);
+    
+    // НОВИЙ КОД: Додаємо метрики з FFT-аналізу
+    const resonanceMetrics = {};
+    
+    if (fftAnalysis && fftAnalysis.resonanceFrequencies && fftAnalysis.resonanceFrequencies.length > 0) {
+      // Додаємо основну резонансну частоту
+      resonanceMetrics['Домінантна частота (Гц)'] = fftAnalysis.dominantFrequency.toFixed(1);
+      
+      // Додаємо рівень шуму з FFT
+      if (typeof fftAnalysis.noiseLevel !== 'undefined') {
+        resonanceMetrics['FFT рівень шуму'] = fftAnalysis.noiseLevel.toFixed(1);
+      }
+      
+      // Додаємо топ-3 резонансні частоти
+      for (let i = 0; i < Math.min(3, fftAnalysis.resonanceFrequencies.length); i++) {
+        const peak = fftAnalysis.resonanceFrequencies[i];
+        resonanceMetrics[`Пік ${i+1} (${peak.frequency.toFixed(1)} Гц)`] = peak.amplitude.toFixed(3);
+      }
+    }
+    
+    return {
+      'Gyro Noise (Roll)': gyroXStdDev.toFixed(2),
+      'Gyro Noise (Pitch)': gyroYStdDev.toFixed(2),
+      'Gyro Noise (Yaw)': gyroZStdDev.toFixed(2),
+      'PID Error (Roll)': pidErrorX.toFixed(2),
+      'PID Error (Pitch)': pidErrorY.toFixed(2),
+      'PID Error (Yaw)': pidErrorZ.toFixed(2),
+      'Motor Balance': motorVariance.toFixed(2),
+      'Response Time (ms)': gyroResponseTime.toFixed(2),
+      ...resonanceMetrics
+    };
+  }
+  
+  // Оновлений метод generateAnalysis з урахуванням FFT-аналізу
+  static generateAnalysis(gyroData, pidData, motorData, rcData, metrics, fftAnalysis = {}) {
+    // Analyze gyro data
+    let gyroAnalysis = '';
+    const gyroNoiseLevel = (
+      parseFloat(metrics['Gyro Noise (Roll)']) + 
+      parseFloat(metrics['Gyro Noise (Pitch)']) + 
+      parseFloat(metrics['Gyro Noise (Yaw)'])
+    ) / 3;
+    
+    if (gyroNoiseLevel < 5) {
+      gyroAnalysis = 'Gyro noise levels are very low, indicating good hardware and filtering. No additional filtering needed.';
+    } else if (gyroNoiseLevel < 10) {
+      gyroAnalysis = 'Gyro noise levels are acceptable but could be improved. Consider adjusting gyro LPF or notch filter settings.';
+    } else if (gyroNoiseLevel < 20) {
+      gyroAnalysis = 'Gyro noise levels are high. Check for mechanical issues and adjust filtering to reduce noise.';
+    } else {
+      gyroAnalysis = 'Very high gyro noise detected. Check mounting, balance, and motor health. Significant filtering changes recommended.';
+    }
+    
+    // Analyze PID data
+    let pidAnalysis = '';
+    const pidErrorLevel = (
+      parseFloat(metrics['PID Error (Roll)']) + 
+      parseFloat(metrics['PID Error (Pitch)']) + 
+      parseFloat(metrics['PID Error (Yaw)'])
+    ) / 3;
+    
+    if (pidErrorLevel < 5) {
+      pidAnalysis = 'PID response is excellent. Current PID values are well-tuned for your setup.';
+    } else if (pidErrorLevel < 10) {
+      pidAnalysis = 'PID response is good but could be improved. Consider fine-tuning P and D terms.';
+    } else if (pidErrorLevel < 20) {
+      pidAnalysis = 'PID response needs improvement. Consider recalibrating your PID values based on the recommendations.';
+    } else {
+      pidAnalysis = 'Poor PID response detected. A complete PID tune is recommended using the provided values as a starting point.';
+    }
+    
+    // НОВИЙ КОД: Аналіз на основі FFT результатів
+    let noiseAnalysis = '';
+    
+    if (fftAnalysis && fftAnalysis.resonanceFrequencies && fftAnalysis.resonanceFrequencies.length > 0) {
+      // Отримуємо домінантну частоту і пік
+      const dominantFreq = fftAnalysis.dominantFrequency;
+      const peaks = fftAnalysis.resonanceFrequencies;
+      
+      if (dominantFreq < 100) {
+        noiseAnalysis = `Виявлено шум на низькій частоті (${dominantFreq.toFixed(1)} Гц), який зазвичай пов'язаний з вібрацією рами або проблемами монтажу. Рекомендується перевірити баланс пропелерів та кріплення моторів.`;
+      } else if (dominantFreq < 200) {
+        noiseAnalysis = `Виявлено шум на середній частоті (${dominantFreq.toFixed(1)} Гц), який зазвичай пов'язаний з пропелерами або моторами. Рекомендується перевірити стан пропелерів та підшипників.`;
+      } else {
+        noiseAnalysis = `Виявлено високочастотний шум (${dominantFreq.toFixed(1)} Гц), який зазвичай є електричним або походить від пошкоджених підшипників. Перевірте стан моторів та електричну систему.`;
+      }
+      
+      // Аналіз піків
+      if (peaks.length > 1) {
+        noiseAnalysis += ` Також виявлено додаткові резонансні піки на ${peaks[1].frequency.toFixed(1)} Гц та ${peaks.length > 2 ? peaks[2].frequency.toFixed(1) + ' Гц' : ''}. `;
+      }
+      
+      // Аналіз діапазонів частот
+      if (fftAnalysis.bandAnalysis) {
+        const problemBands = fftAnalysis.bandAnalysis
+          .filter(band => band.severity > 5)
+          .sort((a, b) => b.severity - a.severity);
+        
+        if (problemBands.length > 0) {
+          noiseAnalysis += ` Виявлено проблемний діапазон частот ${problemBands[0].name} (${problemBands[0].min}-${problemBands[0].max} Гц), який може бути спричинений ${problemBands[0].source}.`;
+        }
+      }
+    } else {
+      // Запасний варіант, якщо FFT-аналіз не містить даних
+      const gyroFFT = this.simulateFFT(gyroData.x, gyroData.y, gyroData.z);
+      
+      if (gyroFFT.peakFrequency < 100) {
+        noiseAnalysis = 'Low-frequency noise detected, likely from frame vibrations or mounting issues. Consider softer mounting or improved damping.';
+      } else if (gyroFFT.peakFrequency < 200) {
+        noiseAnalysis = 'Mid-frequency noise detected, often from props or motors. Check balance and consider adjusting D term filtering.';
+      } else {
+        noiseAnalysis = 'High-frequency noise detected, typically electrical or from damaged bearings/motors. Check motor health and electrical setup.';
+      }
+    }
+    
+    return {
+      gyro: gyroAnalysis,
+      pid: pidAnalysis,
+      noise: noiseAnalysis
+    };
+  }
+  
+  // Замініть метод generateRecommendations наступним, оновленим методом:
+  static generateRecommendations(analyzedData) {
+    const { metrics, analysis, gyroData, pidData, motorData, rcData } = analyzedData;
+    
+    // Parse metrics into numbers for calculations
+    const gyroNoiseRoll = parseFloat(metrics['Gyro Noise (Roll)']);
+    const gyroNoisePitch = parseFloat(metrics['Gyro Noise (Pitch)']);
+    const gyroNoiseYaw = parseFloat(metrics['Gyro Noise (Yaw)']);
+    const pidErrorRoll = parseFloat(metrics['PID Error (Roll)']);
+    const pidErrorPitch = parseFloat(metrics['PID Error (Pitch)']);
+    const pidErrorYaw = parseFloat(metrics['PID Error (Yaw)']);
+    const motorBalance = parseFloat(metrics['Motor Balance']);
+    const responseTime = parseFloat(metrics['Response Time (ms)']);
+    
+    // НОВИЙ КОД: Використання Зіглера-Нікольса для PID рекомендацій
+    let pidRecommendations = [];
+    
+    try {
+      // Створюємо екземпляр тунера Зіглера-Нікольса
+      const znTuner = new ZieglerNicholsTuner();
+      
+      // Генеруємо рекомендації на основі даних польоту
+      const znRecommendations = znTuner.generatePIDRecommendations(
+        gyroData, 
+        rcData,
+        // Визначаємо частоту дискретизації (за замовчуванням 1кГц)
+        1000
+      );
+      
+      if (znRecommendations.roll && znRecommendations.pitch && znRecommendations.yaw) {
+        // Додаємо рекомендації для Roll
+        pidRecommendations.push({
+          title: 'Roll PID за Зіглером-Нікольсом',
+          description: `Оптимізовано на основі методу Зіглера-Нікольса. ${znRecommendations.notes[0] || ''}`,
+          command: `set pid_roll_p = ${znRecommendations.roll.P}\nset pid_roll_i = ${znRecommendations.roll.I}\nset pid_roll_d = ${znRecommendations.roll.D}`
+        });
+        
+        // Додаємо рекомендації для Pitch
+        pidRecommendations.push({
+          title: 'Pitch PID за Зіглером-Нікольсом',
+          description: `Оптимізовано на основі методу Зіглера-Нікольса. ${znRecommendations.notes[0] || ''}`,
+          command: `set pid_pitch_p = ${znRecommendations.pitch.P}\nset pid_pitch_i = ${znRecommendations.pitch.I}\nset pid_pitch_d = ${znRecommendations.pitch.D}`
+        });
+        
+        // Додаємо рекомендації для Yaw
+        pidRecommendations.push({
+          title: 'Yaw PID за Зіглером-Нікольсом',
+          description: `Оптимізовано з меншим D для Yaw. ${znRecommendations.notes[0] || ''}`,
+          command: `set pid_yaw_p = ${znRecommendations.yaw.P}\nset pid_yaw_i = ${znRecommendations.yaw.I}\nset pid_yaw_d = ${znRecommendations.yaw.D}`
+        });
+      } else {
+        throw new Error("Зіглер-Нікольс не видав повні рекомендації");
+      }
+    } catch (error) {
+      console.error("Помилка при генерації PID за методом Зіглера-Нікольса:", error);
+      
+      // Запасний варіант - старий алгоритм розрахунку PID
+      // Roll PID recommendations
+      const rollPValue = this.calculateOptimalP(gyroNoiseRoll, pidErrorRoll, responseTime);
+      const rollIValue = this.calculateOptimalI(pidErrorRoll, responseTime);
+      const rollDValue = this.calculateOptimalD(gyroNoiseRoll, responseTime);
+      
+      pidRecommendations.push({
+        title: 'Roll PID Adjustments',
+        description: `Optimized based on response time of ${responseTime}ms and noise level of ${gyroNoiseRoll}`,
+        command: `set pid_roll_p = ${rollPValue}\nset pid_roll_i = ${rollIValue}\nset pid_roll_d = ${rollDValue}`
+      });
+      
+      // Pitch PID recommendations
+      const pitchPValue = this.calculateOptimalP(gyroNoisePitch, pidErrorPitch, responseTime);
+      const pitchIValue = this.calculateOptimalI(pidErrorPitch, responseTime);
+      const pitchDValue = this.calculateOptimalD(gyroNoisePitch, responseTime);
+      
+      pidRecommendations.push({
+        title: 'Pitch PID Adjustments',
+        description: `Optimized based on response time of ${responseTime}ms and noise level of ${gyroNoisePitch}`,
+        command: `set pid_pitch_p = ${pitchPValue}\nset pid_pitch_i = ${pitchIValue}\nset pid_pitch_d = ${pitchDValue}`
+      });
+      
+      // Yaw PID recommendations
+      const yawPValue = this.calculateOptimalP(gyroNoiseYaw, pidErrorYaw, responseTime, 0.8); // Yaw typically needs less P
+      const yawIValue = this.calculateOptimalI(pidErrorYaw, responseTime, 1.2); // Yaw typically needs more I
+      const yawDValue = this.calculateOptimalD(gyroNoiseYaw, responseTime, 0.5); // Yaw typically needs less D
+      
+      pidRecommendations.push({
+        title: 'Yaw PID Adjustments',
+        description: `Optimized based on response time of ${responseTime}ms and noise level of ${gyroNoiseYaw}`,
+        command: `set pid_yaw_p = ${yawPValue}\nset pid_yaw_i = ${yawIValue}\nset pid_yaw_d = ${yawDValue}`
+      });
+    }
+    
+    // Стандартні рекомендації для фільтрів (без FFT)
+    const filterRecommendations = [];
+    
+    // Gyro filter recommendations
+    const avgGyroNoise = (gyroNoiseRoll + gyroNoisePitch + gyroNoiseYaw) / 3;
+    const gyroLpf = this.calculateOptimalGyroLpf(avgGyroNoise);
+    
+    filterRecommendations.push({
+      title: 'Gyro Low Pass Filter',
+      description: `Optimized based on average gyro noise level of ${avgGyroNoise.toFixed(2)}`,
+      command: `set gyro_lowpass_type = PT1\nset gyro_lowpass_hz = ${gyroLpf}`
+    });
+    
+    // D-term filter recommendations
+    const dTermLpf = this.calculateOptimalDtermLpf(avgGyroNoise, responseTime);
+    
+    filterRecommendations.push({
+      title: 'D-term Low Pass Filter',
+      description: 'Optimized to reduce D-term noise while maintaining responsiveness',
+      command: `set dterm_lowpass_type = PT1\nset dterm_lowpass_hz = ${dTermLpf}`
+    });
+    
+    // Notch filter recommendations
+    const { peakFrequency } = this.simulateFFT(
+      gyroData.x, 
+      gyroData.y, 
+      gyroData.z
+    );
+    
+    if (avgGyroNoise > 10 && peakFrequency > 0) {
+      const notchCenter = Math.round(peakFrequency);
+      const notchWidth = Math.max(20, Math.round(notchCenter * 0.15)); // 15% width or at least 20Hz
+      
+      filterRecommendations.push({
+        title: 'Dynamic Notch Filter',
+        description: `Configured to target noise peak around ${notchCenter}Hz`,
+        command: `set dyn_notch_width_percent = ${Math.round(notchWidth / notchCenter * 100)}\nset dyn_notch_q = 250\nset dyn_notch_min_hz = ${Math.max(80, notchCenter - notchWidth)}\nset dyn_notch_max_hz = ${notchCenter + notchWidth * 2}`
+      });
+    }
+    
+    // Generate the full command set
+    // Спочатку зібирати команди з рекомендацій для PID
+    const fullCommandSet = [
+      '# PID Settings'
+    ];
+    
+    // Додаємо рекомендації для PID
+    for (const rec of pidRecommendations) {
+      const cmdLines = rec.command.split('\n');
+      fullCommandSet.push(...cmdLines);
+    }
+    
+    fullCommandSet.push('');
+    fullCommandSet.push('# Filter Settings');
+    
+    // Додаємо рекомендації для фільтрів
+    for (const rec of filterRecommendations) {
+      const cmdLines = rec.command.split('\n');
+      fullCommandSet.push(...cmdLines);
+    }
+    
+    // Add save command
+    fullCommandSet.push('');
+    fullCommandSet.push('# Save settings');
+    fullCommandSet.push('save');
+    
+    return {
+      pid: pidRecommendations,
+      filters: filterRecommendations,
+      fullCommandSet
+    };
   }
   
   
