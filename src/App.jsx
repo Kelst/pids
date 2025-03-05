@@ -1,8 +1,8 @@
 import React, { useState } from 'react'
 import { FileUploader } from './components/FileUploader'
 import { DataVisualizer } from './components/DataVisualizer'
-import { RecommendationGenerator } from './components/RecommendationGenerator'
 import { BlackboxAnalyzer } from './utils/BlackboxAnalyzer'
+import { ImprovedRecommendationGenerator } from './components/RecommendationGenerator'
 
 function App() {
   const [blackBoxData, setBlackBoxData] = useState(null)
@@ -81,7 +81,7 @@ const handleFileUpload = async (file) => {
         {recommendations && (
           <div className="bg-white rounded-lg shadow-md p-6">
             <h2 className="text-xl font-semibold mb-4">Recommendations</h2>
-            <RecommendationGenerator recommendations={recommendations} />
+            <ImprovedRecommendationGenerator recommendations={recommendations} />
           </div>
         )}
       </div>

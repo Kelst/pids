@@ -1,324 +1,299 @@
 /**
- * Клас для виконання FFT аналізу на даних гіроскопа
+ * Клас для FFT аналізу даних гіроскопа з виявленням резонансних частот
  */
 export class FFTAnalyzer {
-    constructor() {
-      // Константи для аналізу частотних діапазонів
-      this.FREQ_BANDS = [
-        { name: 'низькі частоти', min: 5, max: 50, source: 'рамою або проблемами монтажу' },
-        { name: 'середні частоти', min: 50, max: 150, source: 'пропелерами або моторами' },
-        { name: 'високі частоти', min: 150, max: 300, source: 'електричним шумом або підшипниками' },
-        { name: 'дуже високі частоти', min: 300, max: 600, source: 'проблемами ESC або PWM' }
-      ];
-    }
-  
     /**
-     * Виконує FFT аналіз даних гіроскопа
-     * @param {number[]} gyroData - Дані гіроскопа по одній осі
-     * @param {number} sampleRate - Частота дискретизації в Гц
-     * @returns {Object} - Результати аналізу
+     * Аналізує дані гіроскопа використовуючи FFT для виявлення частот шуму
+     * @param {number[]} gyroData - Масив даних гіроскопа
+     * @param {number} sampleRate - Частота дискретизації в Гц (зазвичай 1000-2000 для Betaflight)
+     * @returns {Object} - Результати FFT аналізу
      */
-    analyzeGyroData(gyroData, sampleRate) {
+    analyzeGyroData(gyroData, sampleRate = 1000) {
       if (!gyroData || gyroData.length < 32) {
         console.warn("Недостатньо даних для FFT аналізу");
-        return { resonanceFrequencies: [], dominantFrequency: 0 };
+        return {
+          resonanceFrequencies: [],
+          dominantFrequency: 0,
+          noiseLevel: 0
+        };
       }
   
-      // Підготовка даних (видалення постійної складової)
-      const data = this._prepareData(gyroData);
-      
-      // Виконання FFT
-      const fftResult = this._computeFFT(data);
-      
-      // Отримання частотного спектру
-      const spectrum = this._getFrequencySpectrum(fftResult, sampleRate, data.length);
-      
-      // Знаходження резонансних піків
-      const peaks = this._findPeaks(spectrum);
-      
-      // Аналіз діапазонів частот
-      const bandAnalysis = this._analyzeBands(spectrum);
-      
-      // Обчислення рівня шуму
-      const noiseLevel = this._calculateNoiseLevel(spectrum);
-      
-      return {
-        resonanceFrequencies: peaks,
-        dominantFrequency: peaks.length > 0 ? peaks[0].frequency : 0,
-        spectrum: spectrum,
-        bandAnalysis: bandAnalysis,
-        noiseLevel: noiseLevel
-      };
-    }
-  
-    /**
-     * Підготовка даних для FFT (видалення постійної складової та нормалізація)
-     * @param {number[]} data - Вхідні дані
-     * @returns {number[]} - Підготовлені дані
-     */
-    _prepareData(data) {
-      // Копіюємо вхідні дані, щоб не змінювати оригінал
-      const preparedData = [...data];
-      
-      // Видаляємо NaN та Infinity
-      const validData = preparedData.filter(val => 
-        !isNaN(val) && isFinite(val)
-      );
-      
-      if (validData.length === 0) {
-        return new Array(32).fill(0);
+      try {
+        // Підготувати дані для FFT (кількість точок повинна бути ступенем 2)
+        const fftSize = this.getNextPowerOfTwo(gyroData.length);
+        const paddedData = this.padArray(gyroData, fftSize);
+        
+        // Застосувати вікно (window function) для зменшення витоку спектру
+        const windowedData = this.applyHannWindow(paddedData);
+        
+        // Виконати FFT
+        const fftResult = this.computeFFT(windowedData);
+        
+        // Аналізувати результати FFT
+        const freqBins = this.getFrequencyBins(fftResult, sampleRate);
+        
+        // Виявити резонансні піки
+        const peaks = this.findPeaks(freqBins);
+        
+        // Оцінити загальний рівень шуму
+        const noiseLevel = this.estimateNoiseLevel(freqBins);
+        
+        // Аналіз по частотних діапазонах
+        const bandAnalysis = this.analyzeBands(freqBins);
+        
+        // Визначити домінантну частоту
+        const dominantFrequency = peaks.length > 0 ? peaks[0].frequency : 0;
+        
+        return {
+          resonanceFrequencies: peaks,
+          dominantFrequency,
+          noiseLevel,
+          bandAnalysis,
+          spectrum: freqBins
+        };
+      } catch (error) {
+        console.error("Помилка під час FFT аналізу:", error);
+        return {
+          resonanceFrequencies: [],
+          dominantFrequency: 0,
+          noiseLevel: 0
+        };
       }
-      
-      // Знаходимо середнє значення (DC компонент)
-      const mean = validData.reduce((sum, val) => sum + val, 0) / validData.length;
-      
-      // Віднімаємо середнє значення від кожного елемента
-      const dcRemovedData = validData.map(val => val - mean);
-      
-      // Застосовуємо вікно Хеннінга для зменшення спектральних витоків
-      return this._applyWindow(dcRemovedData);
     }
-  
+    
     /**
-     * Застосовує вікно Хеннінга до даних для зменшення спектральних витоків
-     * @param {number[]} data - Вхідні дані
-     * @returns {number[]} - Дані з застосованим вікном
+     * Знаходить наступне число, яке є ступенем 2
+     * @param {number} n - Початкове число
+     * @returns {number} - Наступний ступінь 2
      */
-    _applyWindow(data) {
-      const windowedData = [];
-      const n = data.length;
-      
-      for (let i = 0; i < n; i++) {
-        // Коефіцієнт вікна Хеннінга
-        const windowCoeff = 0.5 * (1 - Math.cos(2 * Math.PI * i / (n - 1)));
-        windowedData.push(data[i] * windowCoeff);
-      }
-      
-      return windowedData;
-    }
-  
-    /**
-     * Обчислює FFT для даних
-     * @param {number[]} data - Вхідні дані
-     * @returns {Object} - Комплексні результати FFT
-     */
-    _computeFFT(data) {
-      // Для кращої ефективності FFT, доповнюємо дані до найближчої степені 2
-      const paddedLength = this._nextPowerOf2(data.length);
-      const paddedData = [...data];
-      
-      // Доповнюємо нулями
-      while (paddedData.length < paddedLength) {
-        paddedData.push(0);
-      }
-      
-      // Створюємо комплексні дані (реальна та уявна частини)
-      const complexData = paddedData.map(val => ({ re: val, im: 0 }));
-      
-      // Виконуємо FFT
-      return this._fft(complexData);
-    }
-  
-    /**
-     * Знаходить найближчу степінь 2, що більша або рівна заданому числу
-     * @param {number} n - Число
-     * @returns {number} - Найближча степінь 2
-     */
-    _nextPowerOf2(n) {
+    getNextPowerOfTwo(n) {
       return Math.pow(2, Math.ceil(Math.log2(n)));
     }
-  
+    
     /**
-     * Реалізація алгоритму FFT (Fast Fourier Transform)
-     * Використовує алгоритм Cooley-Tukey
-     * @param {Object[]} data - Комплексні дані (масив об'єктів з re та im)
-     * @returns {Object[]} - Результат FFT
+     * Доповнює масив нулями до заданого розміру
+     * @param {number[]} array - Вхідний масив
+     * @param {number} size - Необхідний розмір
+     * @returns {number[]} - Доповнений масив
      */
-    _fft(data) {
+    padArray(array, size) {
+      const result = new Array(size).fill(0);
+      for (let i = 0; i < Math.min(array.length, size); i++) {
+        result[i] = array[i];
+      }
+      return result;
+    }
+    
+    /**
+     * Застосовує вікно Хана (Hann window) до даних
+     * @param {number[]} data - Вхідні дані
+     * @returns {number[]} - Дані після застосування вікна
+     */
+    applyHannWindow(data) {
+      const result = new Array(data.length);
+      for (let i = 0; i < data.length; i++) {
+        const windowCoef = 0.5 * (1 - Math.cos(2 * Math.PI * i / (data.length - 1)));
+        result[i] = data[i] * windowCoef;
+      }
+      return result;
+    }
+    
+    /**
+     * Обчислює FFT (швидке перетворення Фур'є)
+     * Це спрощена реалізація, в реальному застосуванні варто використовувати оптимізовану бібліотеку
+     * @param {number[]} data - Вхідні дані
+     * @returns {Object} - Результати FFT (дійсна та уявна частини)
+     */
+    computeFFT(data) {
       const n = data.length;
       
-      // Базовий випадок
-      if (n === 1) {
-        return data;
+      // Для малих розмірів використовуємо пряме обчислення DFT
+      if (n <= 4) {
+        return this.computeDFT(data);
       }
       
-      // Розділяємо на парні та непарні індекси
-      const even = [];
-      const odd = [];
+      // FFT використовує рекурсивний алгоритм "розділяй і володарюй"
+      const evenData = [];
+      const oddData = [];
       
-      for (let i = 0; i < n; i += 2) {
-        even.push(data[i]);
-        if (i + 1 < n) {
-          odd.push(data[i + 1]);
-        }
+      for (let i = 0; i < n / 2; i++) {
+        evenData.push(data[i * 2]);
+        oddData.push(data[i * 2 + 1]);
       }
       
-      // Рекурсивно обчислюємо FFT для парних та непарних частин
-      const evenFFT = this._fft(even);
-      const oddFFT = this._fft(odd);
+      const evenFFT = this.computeFFT(evenData);
+      const oddFFT = this.computeFFT(oddData);
       
-      // Об'єднуємо результати
-      const result = new Array(n);
+      const result = {
+        real: new Array(n),
+        imag: new Array(n)
+      };
       
       for (let k = 0; k < n / 2; k++) {
-        // Множник повороту (twiddle factor)
-        const theta = -2 * Math.PI * k / n;
-        const re = Math.cos(theta);
-        const im = Math.sin(theta);
+        // Обчислення фазового множника (twiddle factor)
+        const angle = -2 * Math.PI * k / n;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
         
-        // Множення комплексних чисел: oddFFT[k] * (re + im * i)
-        const oddRe = oddFFT[k].re * re - oddFFT[k].im * im;
-        const oddIm = oddFFT[k].re * im + oddFFT[k].im * re;
+        // Множення фазового множника на компоненти FFT для непарних індексів
+        const oddRealK = oddFFT.real[k] * cos - oddFFT.imag[k] * sin;
+        const oddImagK = oddFFT.real[k] * sin + oddFFT.imag[k] * cos;
         
-        // Перша половина результату
-        result[k] = {
-          re: evenFFT[k].re + oddRe,
-          im: evenFFT[k].im + oddIm
-        };
+        // Об'єднання результатів
+        result.real[k] = evenFFT.real[k] + oddRealK;
+        result.imag[k] = evenFFT.imag[k] + oddImagK;
         
-        // Друга половина результату
-        result[k + n / 2] = {
-          re: evenFFT[k].re - oddRe,
-          im: evenFFT[k].im - oddIm
-        };
+        result.real[k + n / 2] = evenFFT.real[k] - oddRealK;
+        result.imag[k + n / 2] = evenFFT.imag[k] - oddImagK;
       }
       
       return result;
     }
-  
+    
     /**
-     * Перетворює результат FFT у частотний спектр
-     * @param {Object[]} fftResult - Результат FFT
-     * @param {number} sampleRate - Частота дискретизації
-     * @param {number} originalLength - Оригінальна довжина даних
-     * @returns {Object[]} - Частотний спектр
+     * Обчислює DFT (дискретне перетворення Фур'є) - базове перетворення для FFT
+     * @param {number[]} data - Вхідні дані
+     * @returns {Object} - Результати DFT (дійсна та уявна частини)
      */
-    _getFrequencySpectrum(fftResult, sampleRate, originalLength) {
-      const n = fftResult.length;
-      const spectrum = [];
+    computeDFT(data) {
+      const n = data.length;
+      const result = {
+        real: new Array(n).fill(0),
+        imag: new Array(n).fill(0)
+      };
       
-      // Використовуємо тільки першу половину FFT (симетрія)
-      const usefulBins = Math.ceil(n / 2);
+      for (let k = 0; k < n; k++) {
+        for (let t = 0; t < n; t++) {
+          const angle = -2 * Math.PI * k * t / n;
+          result.real[k] += data[t] * Math.cos(angle);
+          result.imag[k] += data[t] * Math.sin(angle);
+        }
+      }
       
-      for (let i = 0; i < usefulBins; i++) {
-        // Обчислюємо частоту для біна
+      return result;
+    }
+    
+    /**
+     * Перетворює результати FFT у частотні діапазони
+     * @param {Object} fftResult - Результати FFT
+     * @param {number} sampleRate - Частота дискретизації
+     * @returns {Array} - Масив частотних діапазонів з амплітудами
+     */
+    getFrequencyBins(fftResult, sampleRate) {
+      const n = fftResult.real.length;
+      const result = [];
+      
+      // Розраховуємо лише до половини, оскільки друга половина - це дзеркальне відображення
+      const numBins = Math.floor(n / 2);
+      
+      for (let i = 0; i < numBins; i++) {
+        // Обчислюємо частоту для кожного біна
         const frequency = i * sampleRate / n;
         
-        // Обчислюємо амплітуду (модуль комплексного числа)
-        // |z| = sqrt(re^2 + im^2)
-        const amplitude = Math.sqrt(
-          fftResult[i].re * fftResult[i].re + 
-          fftResult[i].im * fftResult[i].im
-        ) / originalLength; // Нормалізація
-        
-        spectrum.push({ frequency, amplitude });
-      }
-      
-      return spectrum;
-    }
-  
-    /**
-     * Знаходить піки у частотному спектрі
-     * @param {Object[]} spectrum - Частотний спектр
-     * @returns {Object[]} - Піки, відсортовані за амплітудою
-     */
-    _findPeaks(spectrum) {
-      const peaks = [];
-      const THRESHOLD_FACTOR = 0.1; // Поріг для вважання піком
-      
-      // Знаходимо максимальну амплітуду для розрахунку порогу
-      let maxAmplitude = 0;
-      for (const bin of spectrum) {
-        if (bin.amplitude > maxAmplitude) {
-          maxAmplitude = bin.amplitude;
-        }
-      }
-      
-      const threshold = maxAmplitude * THRESHOLD_FACTOR;
-      
-      // Шукаємо локальні максимуми
-      for (let i = 1; i < spectrum.length - 1; i++) {
-        const prev = spectrum[i - 1].amplitude;
-        const current = spectrum[i].amplitude;
-        const next = spectrum[i + 1].amplitude;
-        
-        // Перевіряємо, чи це локальний максимум і чи він вище порогу
-        if (current > prev && current > next && current > threshold) {
-          // Ігноруємо дуже низькі частоти (DC та близькі до нього)
-          if (spectrum[i].frequency > 5) {
-            peaks.push({
-              frequency: spectrum[i].frequency,
-              amplitude: current
-            });
-          }
-        }
-      }
-      
-      // Сортуємо піки за амплітудою (від найбільшої до найменшої)
-      return peaks.sort((a, b) => b.amplitude - a.amplitude);
-    }
-  
-    /**
-     * Аналізує енергію в різних частотних діапазонах
-     * @param {Object[]} spectrum - Частотний спектр
-     * @returns {Object[]} - Аналіз по діапазонах
-     */
-    _analyzeBands(spectrum) {
-      const bandAnalysis = [];
-      
-      for (const band of this.FREQ_BANDS) {
-        // Фільтруємо біни, що входять у діапазон
-        const binsInBand = spectrum.filter(bin => 
-          bin.frequency >= band.min && bin.frequency <= band.max
+        // Обчислюємо амплітуду (magnitude)
+        const magnitude = Math.sqrt(
+          fftResult.real[i] * fftResult.real[i] + 
+          fftResult.imag[i] * fftResult.imag[i]
         );
         
-        // Сума енергії у діапазоні
-        const energy = binsInBand.reduce((sum, bin) => sum + bin.amplitude, 0);
+        // Нормалізуємо амплітуду
+        const normalizedMagnitude = magnitude / (n / 2);
         
-        // Знаходимо максимальний пік у діапазоні
-        let maxPeak = { frequency: 0, amplitude: 0 };
-        for (const bin of binsInBand) {
-          if (bin.amplitude > maxPeak.amplitude) {
-            maxPeak = bin;
-          }
-        }
-        
-        // Оцінка "проблемності" діапазону (0-10)
-        // Більше значення означає більше проблем у цьому діапазоні
-        const severity = Math.min(10, energy * 20);
-        
-        bandAnalysis.push({
-          name: band.name,
-          min: band.min,
-          max: band.max,
-          energy: energy,
-          maxPeak: maxPeak,
-          severity: severity,
-          source: band.source
+        result.push({
+          frequency,
+          magnitude: normalizedMagnitude
         });
       }
       
-      // Сортуємо за "проблемністю"
-      return bandAnalysis.sort((a, b) => b.severity - a.severity);
+      return result;
     }
-  
+    
     /**
-     * Обчислює загальний рівень шуму на основі спектру
-     * @param {Object[]} spectrum - Частотний спектр
-     * @returns {number} - Рівень шуму
+     * Знаходить піки в спектрі частот
+     * @param {Array} freqBins - Масив частотних діапазонів
+     * @returns {Array} - Масив виявлених піків, відсортованих за амплітудою
      */
-    _calculateNoiseLevel(spectrum) {
-      // Видаляємо дуже низькі частоти (DC компонент)
-      const filteredSpectrum = spectrum.filter(bin => bin.frequency > 5);
+    findPeaks(freqBins) {
+      const peaks = [];
       
-      if (filteredSpectrum.length === 0) {
-        return 0;
+      // Обчислюємо середню амплітуду для визначення порогу
+      const magnitudes = freqBins.map(bin => bin.magnitude);
+      const meanMagnitude = magnitudes.reduce((sum, mag) => sum + mag, 0) / magnitudes.length;
+      const threshold = meanMagnitude * 3; // Поріг: в 3 рази більше за середню амплітуду
+      
+      // Ігноруємо перший бін (DC компонент) та дуже низькі частоти (до 10 Гц)
+      for (let i = 2; i < freqBins.length - 1; i++) {
+        if (freqBins[i].frequency < 10) continue;
+        
+        const prevBin = freqBins[i - 1];
+        const currentBin = freqBins[i];
+        const nextBin = freqBins[i + 1];
+        
+        // Перевіряємо, чи є це локальним максимумом
+        if (currentBin.magnitude > prevBin.magnitude && 
+            currentBin.magnitude > nextBin.magnitude &&
+            currentBin.magnitude > threshold) {
+          
+          // Додаємо пік до результатів
+          peaks.push({
+            frequency: currentBin.frequency,
+            amplitude: currentBin.magnitude
+          });
+        }
       }
       
-      // Обчислюємо середню амплітуду
-      const totalEnergy = filteredSpectrum.reduce((sum, bin) => sum + bin.amplitude, 0);
+      // Сортуємо піки за спаданням амплітуди
+      return peaks.sort((a, b) => b.amplitude - a.amplitude);
+    }
+    
+    /**
+     * Оцінює загальний рівень шуму в спектрі
+     * @param {Array} freqBins - Масив частотних діапазонів
+     * @returns {number} - Рівень шуму
+     */
+    estimateNoiseLevel(freqBins) {
+      // Беремо лише частоти вище 20 Гц для виключення низькочастотних рухів
+      const relevantBins = freqBins.filter(bin => bin.frequency > 20 && bin.frequency < 500);
       
-      // Нормалізуємо до шкали 0-100
-      return Math.min(100, totalEnergy * 100);
+      if (relevantBins.length === 0) return 0;
+      
+      // Обчислюємо середню амплітуду як міру шуму
+      const totalMagnitude = relevantBins.reduce((sum, bin) => sum + bin.magnitude, 0);
+      return totalMagnitude / relevantBins.length * 100; // Масштабуємо для зручності
+    }
+    
+    /**
+     * Аналізує спектр по частотних діапазонах
+     * @param {Array} freqBins - Масив частотних діапазонів
+     * @returns {Array} - Результати аналізу по діапазонах
+     */
+    analyzeBands(freqBins) {
+      // Визначаємо діапазони частот важливі для квадрокоптерів
+      const bands = [
+        { name: "Низькі частоти", min: 10, max: 80, source: "вібрація рами або проблеми балансування", severity: 0 },
+        { name: "Середні частоти", min: 80, max: 180, source: "проблеми з пропелерами або підшипниками", severity: 0 },
+        { name: "Високі частоти", min: 180, max: 300, source: "проблеми з моторами або електронікою", severity: 0 },
+        { name: "Дуже високі частоти", min: 300, max: 500, source: "електричні перешкоди або проблеми з ESC", severity: 0 }
+      ];
+      
+      // Аналізуємо потужність у кожному діапазоні
+      for (const band of bands) {
+        const bandBins = freqBins.filter(bin => 
+          bin.frequency >= band.min && bin.frequency <= band.max
+        );
+        
+        if (bandBins.length > 0) {
+          // Обчислюємо середню і максимальну амплітуду в діапазоні
+          const avgMagnitude = bandBins.reduce((sum, bin) => sum + bin.magnitude, 0) / bandBins.length;
+          const maxMagnitude = Math.max(...bandBins.map(bin => bin.magnitude));
+          
+          // Встановлюємо важкість проблеми на основі амплітуди
+          band.severity = avgMagnitude * 10 + maxMagnitude * 5;
+          band.averageMagnitude = avgMagnitude;
+          band.peakMagnitude = maxMagnitude;
+        }
+      }
+      
+      return bands;
     }
   }
