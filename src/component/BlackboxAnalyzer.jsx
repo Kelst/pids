@@ -1,6 +1,28 @@
-import React, { useState, useEffect } from 'react';
+// Допоміжна функція для обробки даних порціями
+const processInChunks = async (data, chunkSize, processFunc) => {
+    const results = [];
+    const totalChunks = Math.ceil(data.length / chunkSize);
+
+    // Обробляємо дані порціями
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * chunkSize;
+      const end = Math.min(start + chunkSize, data.length);
+      const chunk = data.slice(start, end);
+      
+      // Обробляємо порцію
+      const chunkResult = processFunc(chunk, i, start);
+      results.push(chunkResult);
+      
+      // Даємо браузеру "подихати" між порціями
+      if (i % 5 === 0) { // кожні 5 порцій
+        await new Promise(resolve => setTimeout(resolve, 0)); 
+      }
+    }
+    
+    return results;
+  };import React, { useState, useEffect } from 'react';
 import useBlackboxStore from '../store/blackboxStore';
-import { FFT } from 'dsp.js';
+import * as FFT from 'fft.js';
 import * as math from 'mathjs';
 import _ from 'lodash';
 
@@ -33,247 +55,604 @@ const BlackboxAnalyzer = () => {
       setAnalysisResults(null);
       setRecommendations(null);
 
-      // Усі кроки аналізу
+      // Перевіримо розмір даних і повідомимо в консоль
+      console.log(`Починаємо аналіз ${flightData.length} рядків даних`);
+
+      // Усі кроки аналізу з обробкою помилок для кожного кроку окремо
       const steps = [
-        () => analyzeErrorMetrics(), // 25%
-        () => analyzeStepResponse(), // 50%
-        () => analyzeFrequencyCharacteristics(), // 75%
-        () => analyzeHarmonicDistortion(), // 90%
-        () => analyzeFilters(), // 100%
+        { name: 'Аналіз відхилень', func: analyzeErrorMetrics, progress: 20 },
+        { name: 'Аналіз швидкості реакції', func: analyzeStepResponse, progress: 40 },
+        { name: 'Аналіз частотної характеристики', func: analyzeFrequencyCharacteristics, progress: 60 },
+        { name: 'Аналіз гармонійності руху', func: analyzeHarmonicDistortion, progress: 80 },
+        { name: 'Аналіз фільтрів', func: analyzeFilters, progress: 100 }
       ];
 
       let results = {};
       
-      // Виконуємо кожен крок аналізу
+      // Виконуємо кожен крок аналізу послідовно
       for (let i = 0; i < steps.length; i++) {
-        setProgress(Math.floor((i / steps.length) * 100));
-        const stepResult = await steps[i]();
-        results = { ...results, ...stepResult };
+        const step = steps[i];
+        setProgress(i > 0 ? steps[i-1].progress : 0);
+        console.log(`Виконую крок: ${step.name}`);
         
-        // Імітація затримки для прогрес-бару
-        await new Promise(resolve => setTimeout(resolve, 500));
+        try {
+          // Виконуємо крок з тайм-аутом для оновлення UI
+          const stepResult = await step.func();
+          results = { ...results, ...stepResult };
+          setProgress(step.progress);
+          
+          // Коротка пауза, щоб дати браузеру "подихати"
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } catch (stepError) {
+          console.error(`Помилка у кроці ${step.name}:`, stepError);
+          setError(`Помилка у кроці ${step.name}: ${stepError.message}`);
+          // Продовжуємо з наступним кроком
+        }
       }
 
-      setProgress(100);
+      // Встановлюємо результати аналізу
       setAnalysisResults(results);
 
       // Генеруємо рекомендації на основі результатів аналізу
-      const generatedRecommendations = generateRecommendations(results);
-      setRecommendations(generatedRecommendations);
+      try {
+        console.log('Генерація рекомендацій');
+        const generatedRecommendations = generateRecommendations(results);
+        setRecommendations(generatedRecommendations);
+      } catch (recError) {
+        console.error("Помилка генерації рекомендацій:", recError);
+        setError(`Помилка генерації рекомендацій: ${recError.message}`);
+      }
 
-      // Завершуємо аналіз після короткої затримки
+      // Завершуємо аналіз
+      console.log('Аналіз завершено');
+      setProgress(100);
       setTimeout(() => {
         setAnalyzing(false);
-      }, 500);
+      }, 200);
 
     } catch (err) {
-      console.error("Помилка аналізу:", err);
+      console.error("Глобальна помилка аналізу:", err);
       setError(`Помилка аналізу: ${err.message}`);
       setAnalyzing(false);
     }
   };
 
-  // Функція аналізу відхилень для кожної осі
-  const analyzeErrorMetrics = () => {
+  // Функція аналізу відхилень для кожної осі з покращеним використанням даних
+  const analyzeErrorMetrics = async () => {
     // Шукаємо потрібні колонки в даних
     const axisColumns = {
       roll: {
         setpoint: dataHeaders.find(h => h === 'setpoint[0]'),
         actual: dataHeaders.find(h => h === 'gyroADC[0]'),
-        error: dataHeaders.find(h => h === 'axisError[0]')
+        error: dataHeaders.find(h => h === 'axisError[0]'),
+        p: dataHeaders.find(h => h === 'axisP[0]'),
+        i: dataHeaders.find(h => h === 'axisI[0]'),
+        d: dataHeaders.find(h => h === 'axisD[0]'),
+        f: dataHeaders.find(h => h === 'axisF[0]'),
+        sum: dataHeaders.find(h => h === 'axisSum[0]')
       },
       pitch: {
         setpoint: dataHeaders.find(h => h === 'setpoint[1]'),
         actual: dataHeaders.find(h => h === 'gyroADC[1]'),
-        error: dataHeaders.find(h => h === 'axisError[1]')
+        error: dataHeaders.find(h => h === 'axisError[1]'),
+        p: dataHeaders.find(h => h === 'axisP[1]'),
+        i: dataHeaders.find(h => h === 'axisI[1]'),
+        d: dataHeaders.find(h => h === 'axisD[1]'),
+        f: dataHeaders.find(h => h === 'axisF[1]'),
+        sum: dataHeaders.find(h => h === 'axisSum[1]')
       },
       yaw: {
         setpoint: dataHeaders.find(h => h === 'setpoint[2]'),
         actual: dataHeaders.find(h => h === 'gyroADC[2]'),
-        error: dataHeaders.find(h => h === 'axisError[2]')
+        error: dataHeaders.find(h => h === 'axisError[2]'),
+        p: dataHeaders.find(h => h === 'axisP[2]'),
+        i: dataHeaders.find(h => h === 'axisI[2]'),
+        d: dataHeaders.find(h => h === 'axisD[2]'),
+        f: dataHeaders.find(h => h === 'axisF[2]'),
+        sum: dataHeaders.find(h => h === 'axisSum[2]')
       }
     };
 
     // Розраховуємо середньоквадратичне відхилення та інші метрики
     const errorMetrics = {};
+    const pidContributions = {};
+    
+    // Розмір порції для обробки даних
+    const chunkSize = 1000;
     
     for (const [axis, columns] of Object.entries(axisColumns)) {
-      if (columns.setpoint && columns.actual) {
-        const errors = flightData.map(row => {
-          const setpoint = parseFloat(row[columns.setpoint]) || 0;
-          const actual = parseFloat(row[columns.actual]) || 0;
-          return setpoint - actual;
-        });
-
-        // Відфільтруємо недійсні значення
-        const validErrors = errors.filter(e => !isNaN(e));
-        
-        if (validErrors.length > 0) {
-          // Середньоквадратичне відхилення
-          const squaredErrors = validErrors.map(e => e * e);
-          const meanSquaredError = squaredErrors.reduce((sum, val) => sum + val, 0) / validErrors.length;
-          const rmsError = Math.sqrt(meanSquaredError);
+      if (columns.actual) {
+        try {
+          // Метрики для накопичення
+          let sumError = 0;
+          let sumSquaredError = 0;
+          let maxError = 0;
+          let validErrorCount = 0;
           
-          // Максимальне відхилення
-          const maxError = Math.max(...validErrors.map(Math.abs));
+          // PID компоненти
+          let sumP = 0;
+          let sumI = 0;
+          let sumD = 0;
+          let sumF = 0;
+          let sumTotal = 0;
           
-          // Середнє відхилення
-          const meanError = validErrors.reduce((sum, val) => sum + Math.abs(val), 0) / validErrors.length;
+          // Використовуємо пряме значення axisError, якщо воно доступно
+          const useDirectError = columns.error && dataHeaders.includes(columns.error);
           
-          // Стандартне відхилення
-          const variance = squaredErrors.reduce((sum, val) => sum + val, 0) / validErrors.length - (meanError * meanError);
-          const stdDeviation = Math.sqrt(variance);
+          // Обробляємо дані порціями
+          await processInChunks(flightData, chunkSize, (chunk) => {
+            for (const row of chunk) {
+              let error;
+              
+              if (useDirectError) {
+                // Використовуємо безпосередньо значення axisError з логу
+                error = parseFloat(row[columns.error]) || 0;
+              } else {
+                // Обчислюємо похибку як різницю між setpoint і actual
+                const setpoint = parseFloat(row[columns.setpoint]) || 0;
+                const actual = parseFloat(row[columns.actual]) || 0;
+                error = setpoint - actual;
+              }
+              
+              if (!isNaN(error)) {
+                const absError = Math.abs(error);
+                sumError += absError;
+                sumSquaredError += error * error;
+                maxError = Math.max(maxError, absError);
+                validErrorCount++;
+              }
+              
+              // Збираємо інформацію про PID компоненти, якщо вони доступні
+              if (columns.p && columns.i && columns.d) {
+                const p = parseFloat(row[columns.p]) || 0;
+                const i = parseFloat(row[columns.i]) || 0;
+                const d = parseFloat(row[columns.d]) || 0;
+                const f = parseFloat(row[columns.f]) || 0;
+                const sum = parseFloat(row[columns.sum]) || (p + i + d + f);
+                
+                if (!isNaN(p) && !isNaN(i) && !isNaN(d)) {
+                  sumP += Math.abs(p);
+                  sumI += Math.abs(i);
+                  sumD += Math.abs(d);
+                  sumF += Math.abs(f);
+                  sumTotal += Math.abs(sum);
+                }
+              }
+            }
+          });
           
+          if (validErrorCount > 0) {
+            // Середньоквадратичне відхилення
+            const meanSquaredError = sumSquaredError / validErrorCount;
+            const rmsError = Math.sqrt(meanSquaredError);
+            
+            // Середнє відхилення
+            const meanError = sumError / validErrorCount;
+            
+            // Стандартне відхилення
+            const variance = sumSquaredError / validErrorCount - (meanError * meanError);
+            const stdDeviation = Math.sqrt(Math.max(0, variance)); // Забезпечуємо, що варіація невід'ємна
+            
+            errorMetrics[axis] = {
+              rmsError,
+              maxError,
+              meanError,
+              stdDeviation
+            };
+            
+            // Розраховуємо відносний внесок кожної компоненти PID
+            if (sumTotal > 0) {
+              pidContributions[axis] = {
+                p: sumP / sumTotal,
+                i: sumI / sumTotal,
+                d: sumD / sumTotal,
+                f: sumF / sumTotal
+              };
+            } else {
+              pidContributions[axis] = {
+                p: 0,
+                i: 0,
+                d: 0,
+                f: 0
+              };
+            }
+            
+          } else {
+            errorMetrics[axis] = {
+              rmsError: 0,
+              maxError: 0,
+              meanError: 0,
+              stdDeviation: 0
+            };
+            pidContributions[axis] = {
+              p: 0,
+              i: 0,
+              d: 0,
+              f: 0
+            };
+          }
+        } catch (e) {
+          console.error(`Помилка аналізу для осі ${axis}:`, e);
           errorMetrics[axis] = {
-            rmsError,
-            maxError,
-            meanError,
-            stdDeviation
+            rmsError: 0,
+            maxError: 0,
+            meanError: 0,
+            stdDeviation: 0
+          };
+          pidContributions[axis] = {
+            p: 0,
+            i: 0,
+            d: 0,
+            f: 0
           };
         }
       }
     }
 
-    return { errorMetrics };
+    return { errorMetrics, pidContributions };
   };
 
-  // Функція аналізу швидкості реакції системи
-  const analyzeStepResponse = () => {
+  // Функція аналізу швидкості реакції системи з покращеним використанням даних
+  const analyzeStepResponse = async () => {
     // Шукаємо точки різкої зміни в командах
     const stepResponseMetrics = {
-      roll: { settlingTime: 0, overshoot: 0, riseTime: 0 },
-      pitch: { settlingTime: 0, overshoot: 0, riseTime: 0 },
-      yaw: { settlingTime: 0, overshoot: 0, riseTime: 0 }
+      roll: { settlingTime: 0, overshoot: 0, riseTime: 0, delay: 0 },
+      pitch: { settlingTime: 0, overshoot: 0, riseTime: 0, delay: 0 },
+      yaw: { settlingTime: 0, overshoot: 0, riseTime: 0, delay: 0 }
     };
+
+    // Структура для збереження історії змін
+    const responseHistory = {
+      roll: [],
+      pitch: [],
+      yaw: []
+    };
+
+    // Розмір порції для обробки даних
+    const chunkSize = 500;
+    const sampleTimeUs = parseFloat(metadata.looptime) || 1000; // Час між семплами в мікросекундах
+    const sampleTimeMs = sampleTimeUs / 1000; // Переводимо в мілісекунди
 
     for (const axis of ['roll', 'pitch', 'yaw']) {
       const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
       
+      // Використовуємо дані як з RC команд, так і setpoint - вони можуть відрізнятися через фільтрацію
       const rcCommandCol = `rcCommand[${axisIndex}]`;
+      const setpointCol = `setpoint[${axisIndex}]`;
       const gyroCol = `gyroADC[${axisIndex}]`;
+      const pTermCol = `axisP[${axisIndex}]`;
+      const errorCol = `axisError[${axisIndex}]`;
       
-      if (dataHeaders.includes(rcCommandCol) && dataHeaders.includes(gyroCol)) {
-        // Знаходимо значні зміни в командах
-        const stepChanges = [];
-        const threshold = 50; // Поріг для виявлення різкої зміни
-        
-        for (let i = 1; i < flightData.length - 10; i++) {
-          const prevCommand = parseFloat(flightData[i-1][rcCommandCol]) || 0;
-          const currentCommand = parseFloat(flightData[i][rcCommandCol]) || 0;
+      const columnsExist = dataHeaders.includes(setpointCol) && 
+                          dataHeaders.includes(gyroCol) && 
+                          (dataHeaders.includes(rcCommandCol) || dataHeaders.includes(errorCol));
+      
+      if (columnsExist) {
+        try {
+          // Знаходимо значні зміни команд
+          const stepChanges = [];
+          const threshold = 30; // Поріг для виявлення різкої зміни
           
-          if (Math.abs(currentCommand - prevCommand) > threshold) {
-            // Знайдена різка зміна
-            const startIndex = i;
-            const startTime = parseFloat(flightData[i].time) || 0;
-            const targetValue = currentCommand;
+          // Буфер для відстеження попередніх значень
+          let prevSetpoint = null;
+          let prevTime = null;
+          let prevGyro = null;
+          
+          // Створюємо масив для відстеження змін у часі
+          const timeHistory = [];
+          const setpointHistory = [];
+          const gyroHistory = [];
+          const pTermHistory = [];
+          
+          // Проходимо дані для виявлення різких змін
+          await processInChunks(flightData, chunkSize, (chunk, chunkIndex, startIndex) => {
+            for (let i = 0; i < chunk.length; i++) {
+              const row = chunk[i];
+              const globalIndex = startIndex + i;
+              
+              const currentTime = parseFloat(row.time) || (globalIndex * sampleTimeMs * 1000); // в мікросекундах
+              const currentSetpoint = parseFloat(row[setpointCol]) || 0;
+              const currentGyro = parseFloat(row[gyroCol]) || 0;
+              const currentPTerm = dataHeaders.includes(pTermCol) ? parseFloat(row[pTermCol]) || 0 : 0;
+              
+              // Зберігаємо історію для аналізу
+              timeHistory.push(currentTime);
+              setpointHistory.push(currentSetpoint);
+              gyroHistory.push(currentGyro);
+              pTermHistory.push(currentPTerm);
+              
+              // Якщо це не перший запис і є суттєва зміна у setpoint
+              if (prevSetpoint !== null && Math.abs(currentSetpoint - prevSetpoint) > threshold) {
+                // Знайдена різка зміна
+                const startIndex = globalIndex;
+                const startTime = currentTime;
+                const targetValue = currentSetpoint;
+                const startGyro = currentGyro;
+                
+                // Збираємо реакцію системи (до 100 точок після зміни)
+                const response = [];
+                
+                for (let j = 0; j < 100 && (globalIndex + j) < flightData.length; j++) {
+                  if (globalIndex + j >= flightData.length) break;
+                  
+                  // Якщо не вийшли за межі поточної порції
+                  if (i + j < chunk.length) {
+                    const responseRow = chunk[i + j];
+                    const time = parseFloat(responseRow.time) || 0;
+                    const gyroValue = parseFloat(responseRow[gyroCol]) || 0;
+                    response.push({ time: (time - startTime) / 1000, value: gyroValue }); // час в мс
+                  } 
+                  // Якщо вийшли за межі порції - збережемо позицію для подальшого аналізу
+                  else {
+                    stepChanges.push({ 
+                      startIndex, 
+                      targetValue, 
+                      startGyro,
+                      startTime,
+                      response,
+                      complete: false
+                    });
+                    break;
+                  }
+                }
+                
+                // Якщо зібрали достатньо точок в межах порції, відзначаємо як завершений
+                if (response.length >= 20) {
+                  stepChanges.push({ 
+                    startIndex, 
+                    targetValue, 
+                    startGyro,
+                    startTime,
+                    response,
+                    complete: true
+                  });
+                }
+              }
+              
+              // Оновлюємо попередні значення
+              prevSetpoint = currentSetpoint;
+              prevTime = currentTime;
+              prevGyro = currentGyro;
+            }
+          });
+          
+          // Аналізуємо знайдені зміни
+          if (stepChanges.length > 0) {
+            // Знаходимо найкращий крок для аналізу - з найбільшою зміною
+            let bestStep = stepChanges[0];
+            let bestMagnitude = Math.abs(bestStep.targetValue - bestStep.startGyro);
             
-            // Збираємо реакцію системи
-            const response = [];
-            for (let j = 0; j < 50 && (i + j) < flightData.length; j++) {
-              const time = parseFloat(flightData[i + j].time) || 0;
-              const gyroValue = parseFloat(flightData[i + j][gyroCol]) || 0;
-              response.push({ time: time - startTime, value: gyroValue });
+            for (let i = 1; i < stepChanges.length; i++) {
+              const step = stepChanges[i];
+              if (step.complete) {
+                const magnitude = Math.abs(step.targetValue - step.startGyro);
+                if (magnitude > bestMagnitude) {
+                  bestMagnitude = magnitude;
+                  bestStep = step;
+                }
+              }
             }
             
-            if (response.length > 0) {
-              stepChanges.push({ startIndex, targetValue, response });
-            }
+            const { targetValue, startGyro, response } = bestStep;
             
-            // Пропускаємо наступні кілька точок, щоб не реагувати кілька разів на ту саму зміну
-            i += 5;
-          }
-        }
-        
-        // Аналізуємо знайдені зміни
-        if (stepChanges.length > 0) {
-          // Для спрощення, обчислюємо метрики на основі першої знайденої різкої зміни
-          const { targetValue, response } = stepChanges[0];
-          
-          // Значення стабілізації (95% від цільового)
-          const settlingThreshold = 0.05 * Math.abs(targetValue);
-          
-          // Знаходимо час стабілізації
-          let settlingTime = 0;
-          for (let i = response.length - 1; i >= 0; i--) {
-            if (Math.abs(response[i].value - targetValue) > settlingThreshold) {
-              settlingTime = response[i].time;
-              break;
+            // Зберігаємо знайдені зміни для візуалізації
+            responseHistory[axis] = response;
+            
+            // Визначаємо фактичний діапазон зміни (від стартового gyro до цільового значення)
+            const actualRange = targetValue - startGyro;
+            
+            if (Math.abs(actualRange) > 5) { // Переконуємося, що зміна суттєва
+              // Значення стабілізації (95% від цільового)
+              const settlingThreshold = 0.05 * Math.abs(actualRange);
+              
+              // Знаходимо час стабілізації
+              let settlingTime = 0;
+              let stabilized = false;
+              
+              // Перевіряємо коли значення стабілізується (знаходиться в межах 5% від цільового тривалий час)
+              for (let i = 0; i < response.length; i++) {
+                if (Math.abs(response[i].value - targetValue) <= settlingThreshold) {
+                  // Перевіряємо, чи воно залишається стабільним
+                  let stable = true;
+                  for (let j = i; j < Math.min(i + 10, response.length); j++) {
+                    if (Math.abs(response[j].value - targetValue) > settlingThreshold) {
+                      stable = false;
+                      break;
+                    }
+                  }
+                  
+                  if (stable) {
+                    settlingTime = response[i].time;
+                    stabilized = true;
+                    break;
+                  }
+                }
+              }
+              
+              // Якщо не знайдено момент стабілізації, використовуємо останню точку
+              if (!stabilized && response.length > 0) {
+                settlingTime = response[response.length - 1].time;
+              }
+              
+              // Знаходимо перерегулювання
+              let maxValue = startGyro;
+              let maxIndex = 0;
+              
+              for (let i = 0; i < response.length; i++) {
+                if (Math.abs(response[i].value - startGyro) > Math.abs(maxValue - startGyro)) {
+                  maxValue = response[i].value;
+                  maxIndex = i;
+                }
+              }
+              
+              // Розраховуємо перерегулювання відносно діапазону зміни
+              const overshoot = actualRange !== 0 ? 
+                ((maxValue - targetValue) / actualRange) * 100 : 0;
+              
+              // Знаходимо час наростання (від 10% до 90% цільового значення)
+              const riseStartThreshold = startGyro + 0.1 * actualRange;
+              const riseEndThreshold = startGyro + 0.9 * actualRange;
+              
+              let riseStartTime = 0;
+              let riseEndTime = 0;
+              let riseStartFound = false;
+              let riseEndFound = false;
+              
+              for (let i = 0; i < response.length; i++) {
+                // Для позитивного діапазону зміни
+                if (actualRange > 0) {
+                  if (!riseStartFound && response[i].value >= riseStartThreshold) {
+                    riseStartTime = response[i].time;
+                    riseStartFound = true;
+                  }
+                  if (!riseEndFound && response[i].value >= riseEndThreshold) {
+                    riseEndTime = response[i].time;
+                    riseEndFound = true;
+                    break;
+                  }
+                } 
+                // Для негативного діапазону зміни
+                else {
+                  if (!riseStartFound && response[i].value <= riseStartThreshold) {
+                    riseStartTime = response[i].time;
+                    riseStartFound = true;
+                  }
+                  if (!riseEndFound && response[i].value <= riseEndThreshold) {
+                    riseEndTime = response[i].time;
+                    riseEndFound = true;
+                    break;
+                  }
+                }
+              }
+              
+              const riseTime = riseEndFound && riseStartFound ? 
+                riseEndTime - riseStartTime : 
+                settlingTime * 0.6; // Приблизна оцінка, якщо точні моменти не знайдено
+              
+              // Знаходимо затримку від зміни setpoint до початку реакції (10% зміни)
+              const delay = riseStartFound ? riseStartTime : 0;
+              
+              stepResponseMetrics[axis] = {
+                settlingTime,
+                overshoot,
+                riseTime,
+                delay
+              };
             }
           }
-          
-          // Знаходимо перерегулювання
-          const maxValue = Math.max(...response.map(r => r.value));
-          const overshoot = maxValue > targetValue ? 
-            ((maxValue - targetValue) / targetValue) * 100 : 0;
-          
-          // Знаходимо час наростання (від 10% до 90% цільового значення)
-          const riseStartThreshold = 0.1 * targetValue;
-          const riseEndThreshold = 0.9 * targetValue;
-          
-          let riseStartTime = 0;
-          let riseEndTime = 0;
-          
-          for (let i = 0; i < response.length; i++) {
-            if (response[i].value >= riseStartThreshold && riseStartTime === 0) {
-              riseStartTime = response[i].time;
-            }
-            if (response[i].value >= riseEndThreshold && riseEndTime === 0) {
-              riseEndTime = response[i].time;
-              break;
-            }
-          }
-          
-          const riseTime = riseEndTime - riseStartTime;
-          
-          stepResponseMetrics[axis] = {
-            settlingTime,
-            overshoot,
-            riseTime
-          };
+        } catch (err) {
+          console.error(`Помилка аналізу швидкості реакції для осі ${axis}:`, err);
         }
       }
     }
 
-    return { stepResponseMetrics };
+    return { stepResponseMetrics, responseHistory };
   };
 
-  // Функція аналізу частотної характеристики (FFT)
-  const analyzeFrequencyCharacteristics = () => {
+  // Функція аналізу частотної характеристики (FFT) з покращеним використанням даних
+  const analyzeFrequencyCharacteristics = async () => {
     const frequencyAnalysis = {
-      roll: { dominantFrequencies: [], noiseLevel: 0 },
-      pitch: { dominantFrequencies: [], noiseLevel: 0 },
-      yaw: { dominantFrequencies: [], noiseLevel: 0 }
+      roll: { 
+        dominantFrequencies: [], 
+        noiseLevel: 0,
+        filteredVsUnfiltered: { ratio: 0, noiseDiff: 0 } 
+      },
+      pitch: { 
+        dominantFrequencies: [], 
+        noiseLevel: 0,
+        filteredVsUnfiltered: { ratio: 0, noiseDiff: 0 } 
+      },
+      yaw: { 
+        dominantFrequencies: [], 
+        noiseLevel: 0,
+        filteredVsUnfiltered: { ratio: 0, noiseDiff: 0 } 
+      }
     };
+
+    // Орієнтовна частота запису даних (в Гц)
+    const looptimeUs = parseFloat(metadata.looptime) || 312; // мікросекунди
+    const sampleRate = Math.round(1000000 / looptimeUs); // Гц
+    
+    console.log(`Використовуємо частоту дискретизації: ${sampleRate} Гц`);
 
     // Аналіз для кожної осі
     for (const axis of ['roll', 'pitch', 'yaw']) {
       const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
       const gyroCol = `gyroADC[${axisIndex}]`;
+      const gyroUnfiltCol = `gyroUnfilt[${axisIndex}]`;
       
-      if (dataHeaders.includes(gyroCol)) {
-        // Отримуємо дані гіроскопа для FFT
-        let gyroData = flightData.map(row => parseFloat(row[gyroCol]) || 0);
-        
-        // Для FFT потрібна довжина, що є степенем 2
-        const fftSize = 1024;
-        if (gyroData.length > fftSize) {
-          gyroData = gyroData.slice(0, fftSize);
-        } else if (gyroData.length < fftSize) {
-          // Доповнюємо нулями, якщо даних менше
-          gyroData = [...gyroData, ...Array(fftSize - gyroData.length).fill(0)];
-        }
-        
-        // Виконуємо FFT
+      // Перевіряємо наявність колонок
+      const hasFiltered = dataHeaders.includes(gyroCol);
+      const hasUnfiltered = dataHeaders.includes(gyroUnfiltCol);
+      
+      if (hasFiltered) {
         try {
-          const fft = new FFT(fftSize, 1000); // Припускаємо частоту дискретизації 1000 Гц
-          fft.forward(gyroData);
+          // Для FFT потрібна довжина, що є степенем 2
+          const fftSize = 1024;
           
-          // Отримуємо амплітудний спектр
-          const spectrum = [];
+          // Отримуємо дані гіроскопа для FFT (фільтровані)
+          const gyroData = new Array(fftSize).fill(0);
+          // Також збираємо нефільтровані дані, якщо вони доступні
+          const gyroUnfiltData = hasUnfiltered ? new Array(fftSize).fill(0) : null;
+          
+          // Збираємо дані порційно
+          let dataCollected = 0;
+          const chunkSize = 2000;
+          
+          // Розмір даних для збору 
+          const collectSize = Math.min(flightData.length, fftSize * 2);
+          
+          // Обробляємо дані порціями і збираємо значення для FFT
+          await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
+            for (const row of chunk) {
+              if (dataCollected < fftSize) {
+                const value = parseFloat(row[gyroCol]) || 0;
+                if (!isNaN(value)) {
+                  gyroData[dataCollected] = value;
+                  
+                  // Якщо доступні нефільтровані дані, також їх зберігаємо
+                  if (hasUnfiltered) {
+                    const unfiltValue = parseFloat(row[gyroUnfiltCol]) || 0;
+                    gyroUnfiltData[dataCollected] = unfiltValue;
+                  }
+                  
+                  dataCollected++;
+                }
+              }
+            }
+          });
+          
+          // Застосовуємо вікно Ханна для зменшення витоку спектру
+          const windowedGyroData = new Array(fftSize);
+          for (let i = 0; i < fftSize; i++) {
+            // Вікно Ханна: 0.5 * (1 - cos(2π*n/(N-1)))
+            const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
+            windowedGyroData[i] = gyroData[i] * window;
+          }
+          
+          // Налаштовуємо FFT для фільтрованих даних
+          const fft = new FFT(fftSize);
+          const out = new Array(fftSize * 2); // Complex output array
+          
+          // Копіюємо дані до комплексного масиву (дійсна частина)
+          const complexData = new Array(fftSize * 2).fill(0);
+          for (let i = 0; i < fftSize; i++) {
+            complexData[i * 2] = windowedGyroData[i]; // Real part
+            complexData[i * 2 + 1] = 0;               // Imaginary part
+          }
+          
+          // Запускаємо FFT
+          fft.transform(out, complexData);
+          
+          // Обчислюємо спектр (амплітуда) і зберігаємо в масиві
+          // Використовуємо лише половину спектру (до частоти Найквіста)
+          const spectrum = new Array(Math.floor(fftSize / 2));
           for (let i = 0; i < fftSize / 2; i++) {
-            const frequency = i * (1000 / fftSize);
-            const magnitude = Math.sqrt(fft.real[i] * fft.real[i] + fft.imag[i] * fft.imag[i]);
-            spectrum.push({ frequency, magnitude });
+            const real = out[i * 2];
+            const imag = out[i * 2 + 1];
+            const frequency = i * (sampleRate / fftSize); // Частота в Гц
+            const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2); // Нормалізація
+            spectrum[i] = { frequency, magnitude };
           }
           
           // Знаходимо домінуючі частоти (локальні максимуми)
@@ -281,27 +660,113 @@ const BlackboxAnalyzer = () => {
           for (let i = 1; i < spectrum.length - 1; i++) {
             if (spectrum[i].magnitude > spectrum[i-1].magnitude && 
                 spectrum[i].magnitude > spectrum[i+1].magnitude &&
-                spectrum[i].magnitude > 10) { // Поріг для фільтрації шуму
+                spectrum[i].magnitude > 0.01) { // Поріг для фільтрації шуму
               dominantFrequencies.push({
                 frequency: spectrum[i].frequency,
                 magnitude: spectrum[i].magnitude
               });
             }
+            
+            // Обмежуємо кількість домінуючих частот
+            if (dominantFrequencies.length >= 25) break;
           }
           
           // Сортуємо за величиною і беремо топ-5
           dominantFrequencies.sort((a, b) => b.magnitude - a.magnitude);
           const top5Frequencies = dominantFrequencies.slice(0, 5);
           
-          // Оцінюємо загальний рівень шуму
-          const noiseLevel = spectrum.reduce((sum, s) => sum + s.magnitude, 0) / spectrum.length;
+          // Оцінюємо загальний рівень шуму (використовуємо цикл для зменшення навантаження на стек)
+          let totalMagnitude = 0;
+          for (let i = 0; i < spectrum.length; i++) {
+            totalMagnitude += spectrum[i].magnitude;
+          }
+          const noiseLevel = totalMagnitude / spectrum.length;
           
-          frequencyAnalysis[axis] = {
+          // Структура для результатів аналізу
+          const analysisResult = {
             dominantFrequencies: top5Frequencies,
-            noiseLevel
+            noiseLevel,
+            filteredVsUnfiltered: { ratio: 1, noiseDiff: 0 } // Значення за замовчуванням
           };
+          
+          // Якщо доступні нефільтровані дані, обчислюємо різницю між фільтрованими та нефільтрованими
+          if (hasUnfiltered && gyroUnfiltData) {
+            // Застосовуємо те ж саме вікно Ханна до нефільтрованих даних
+            const windowedUnfiltData = new Array(fftSize);
+            for (let i = 0; i < fftSize; i++) {
+              const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
+              windowedUnfiltData[i] = gyroUnfiltData[i] * window;
+            }
+            
+            // Налаштовуємо FFT для нефільтрованих даних
+            const unfiltFft = new FFT(fftSize);
+            const unfiltOut = new Array(fftSize * 2);
+            
+            // Копіюємо дані до комплексного масиву
+            const unfiltComplexData = new Array(fftSize * 2).fill(0);
+            for (let i = 0; i < fftSize; i++) {
+              unfiltComplexData[i * 2] = windowedUnfiltData[i]; // Дійсна частина
+              unfiltComplexData[i * 2 + 1] = 0;                // Уявна частина
+            }
+            
+            // Запускаємо FFT для нефільтрованих даних
+            unfiltFft.transform(unfiltOut, unfiltComplexData);
+            
+            // Обчислюємо спектр нефільтрованих даних
+            const unfiltSpectrum = new Array(Math.floor(fftSize / 2));
+            for (let i = 0; i < fftSize / 2; i++) {
+              const real = unfiltOut[i * 2];
+              const imag = unfiltOut[i * 2 + 1];
+              const frequency = i * (sampleRate / fftSize);
+              const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2);
+              unfiltSpectrum[i] = { frequency, magnitude };
+            }
+            
+            // Обчислюємо загальний рівень шуму для нефільтрованих даних
+            let unfiltTotalMagnitude = 0;
+            for (let i = 0; i < unfiltSpectrum.length; i++) {
+              unfiltTotalMagnitude += unfiltSpectrum[i].magnitude;
+            }
+            const unfiltNoiseLevel = unfiltTotalMagnitude / unfiltSpectrum.length;
+            
+            // Обчислюємо співвідношення та різницю шуму
+            const noiseRatio = unfiltNoiseLevel > 0 ? noiseLevel / unfiltNoiseLevel : 1;
+            const noiseDiff = unfiltNoiseLevel - noiseLevel;
+            
+            analysisResult.filteredVsUnfiltered = {
+              ratio: noiseRatio,
+              noiseDiff: noiseDiff,
+              unfiltNoiseLevel
+            };
+            
+            // Знаходимо домінуючі частоти в нефільтрованих даних
+            const unfiltDominantFreqs = [];
+            for (let i = 1; i < unfiltSpectrum.length - 1; i++) {
+              if (unfiltSpectrum[i].magnitude > unfiltSpectrum[i-1].magnitude && 
+                  unfiltSpectrum[i].magnitude > unfiltSpectrum[i+1].magnitude &&
+                  unfiltSpectrum[i].magnitude > 0.01) {
+                unfiltDominantFreqs.push({
+                  frequency: unfiltSpectrum[i].frequency,
+                  magnitude: unfiltSpectrum[i].magnitude
+                });
+              }
+              
+              if (unfiltDominantFreqs.length >= 10) break;
+            }
+            
+            // Сортуємо за величиною і беремо топ-5
+            unfiltDominantFreqs.sort((a, b) => b.magnitude - a.magnitude);
+            analysisResult.unfilteredDominantFrequencies = unfiltDominantFreqs.slice(0, 5);
+          }
+          
+          frequencyAnalysis[axis] = analysisResult;
         } catch (err) {
           console.error(`Помилка FFT для осі ${axis}:`, err);
+          frequencyAnalysis[axis] = {
+            dominantFrequencies: [],
+            noiseLevel: 0,
+            filteredVsUnfiltered: { ratio: 1, noiseDiff: 0 }
+          };
         }
       }
     }
@@ -309,54 +774,149 @@ const BlackboxAnalyzer = () => {
     return { frequencyAnalysis };
   };
 
-  // Функція аналізу гармонійності руху
-  const analyzeHarmonicDistortion = () => {
+  // Функція аналізу гармонійності руху з покращеним використанням даних
+  const analyzeHarmonicDistortion = async () => {
     const harmonicAnalysis = {
-      roll: { thd: 0, stabilityScore: 0, oscillationDetected: false },
-      pitch: { thd: 0, stabilityScore: 0, oscillationDetected: false },
-      yaw: { thd: 0, stabilityScore: 0, oscillationDetected: false }
+      roll: { thd: 0, stabilityScore: 0, oscillationDetected: false, pidHarmonics: {} },
+      pitch: { thd: 0, stabilityScore: 0, oscillationDetected: false, pidHarmonics: {} },
+      yaw: { thd: 0, stabilityScore: 0, oscillationDetected: false, pidHarmonics: {} }
     };
+
+    // Орієнтовна частота запису даних (в Гц)
+    const looptimeUs = parseFloat(metadata.looptime) || 312; // мікросекунди
+    const sampleRate = Math.round(1000000 / looptimeUs); // Гц
 
     // Для кожної осі
     for (const axis of ['roll', 'pitch', 'yaw']) {
       const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
-      const gyroCol = `gyroADC[${axisIndex}]`;
       
-      if (dataHeaders.includes(gyroCol)) {
-        // Отримуємо дані гіроскопа
-        const gyroData = flightData.map(row => parseFloat(row[gyroCol]) || 0);
-        
-        // Розрахунок THD (Total Harmonic Distortion)
+      // Отримуємо всі релевантні колонки даних
+      const gyroCol = `gyroADC[${axisIndex}]`;
+      const pTermCol = `axisP[${axisIndex}]`;
+      const iTermCol = `axisI[${axisIndex}]`;
+      const dTermCol = `axisD[${axisIndex}]`;
+      const sumCol = `axisSum[${axisIndex}]`;
+      
+      // Перевіряємо наявність колонок
+      const hasGyro = dataHeaders.includes(gyroCol);
+      const hasPID = dataHeaders.includes(pTermCol) && 
+                    dataHeaders.includes(iTermCol) && 
+                    dataHeaders.includes(dTermCol);
+      const hasSum = dataHeaders.includes(sumCol);
+      
+      if (hasGyro) {
         try {
+          // Для FFT потрібна довжина, що є степенем 2
           const fftSize = 1024;
-          const dataSegment = gyroData.slice(0, Math.min(fftSize, gyroData.length));
           
-          if (dataSegment.length > 0) {
-            // Доповнюємо нулями, якщо потрібно
-            const paddedData = [...dataSegment, ...Array(fftSize - dataSegment.length).fill(0)];
-            
-            const fft = new FFT(fftSize, 1000);
-            fft.forward(paddedData);
-            
-            // Отримуємо амплітудний спектр
-            const spectrum = [];
-            for (let i = 0; i < fftSize / 2; i++) {
-              const magnitude = Math.sqrt(fft.real[i] * fft.real[i] + fft.imag[i] * fft.imag[i]);
-              spectrum.push(magnitude);
+          // Масиви для збору даних
+          const gyroData = new Array(fftSize).fill(0);
+          const pData = hasPID ? new Array(fftSize).fill(0) : null;
+          const iData = hasPID ? new Array(fftSize).fill(0) : null;
+          const dData = hasPID ? new Array(fftSize).fill(0) : null;
+          const sumData = hasSum ? new Array(fftSize).fill(0) : null;
+          
+          // Збираємо дані порційно
+          let dataCollected = 0;
+          const chunkSize = 2000;
+          
+          // Розмір даних для збору 
+          const collectSize = Math.min(flightData.length, fftSize * 2);
+          
+          // Обробляємо дані порціями і збираємо значення для FFT
+          await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
+            for (const row of chunk) {
+              if (dataCollected < fftSize) {
+                const gyroValue = parseFloat(row[gyroCol]) || 0;
+                
+                if (!isNaN(gyroValue)) {
+                  gyroData[dataCollected] = gyroValue;
+                  
+                  // Якщо доступні PID-дані, збираємо і їх
+                  if (hasPID) {
+                    pData[dataCollected] = parseFloat(row[pTermCol]) || 0;
+                    iData[dataCollected] = parseFloat(row[iTermCol]) || 0;
+                    dData[dataCollected] = parseFloat(row[dTermCol]) || 0;
+                  }
+                  
+                  // Якщо доступні дані про суму PID-компонентів
+                  if (hasSum) {
+                    sumData[dataCollected] = parseFloat(row[sumCol]) || 0;
+                  }
+                  
+                  dataCollected++;
+                }
+              }
             }
+          });
+          
+          // Застосовуємо вікно Ханна для зменшення витоку спектру
+          const windowedGyroData = new Array(fftSize);
+          for (let i = 0; i < fftSize; i++) {
+            const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
+            windowedGyroData[i] = gyroData[i] * window;
+          }
+          
+          // Налаштовуємо FFT
+          const fft = new FFT(fftSize);
+          const out = new Array(fftSize * 2);
+          
+          // Підготовка комплексних даних
+          const complexData = new Array(fftSize * 2).fill(0);
+          for (let i = 0; i < fftSize; i++) {
+            complexData[i * 2] = windowedGyroData[i]; // Real part
+            complexData[i * 2 + 1] = 0;               // Imaginary part
+          }
+          
+          // Запускаємо FFT
+          fft.transform(out, complexData);
+          
+          // Обчислюємо спектр (амплітуда) - попередньо виділяємо пам'ять
+          const spectrum = new Array(Math.floor(fftSize / 2));
+          for (let i = 0; i < fftSize / 2; i++) {
+            const real = out[i * 2];
+            const imag = out[i * 2 + 1];
+            const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2);
+            spectrum[i] = magnitude;
+          }
+          
+          // Знаходимо фундаментальну частоту (найбільша амплітуда)
+          let fundamentalIndex = 0;
+          let fundamentalMagnitude = 0;
+          
+          // Пошук максимуму без використання Math.max(...array)
+          for (let i = 1; i < spectrum.length; i++) { // починаємо з 1, щоб уникнути DC-складової
+            if (spectrum[i] > fundamentalMagnitude) {
+              fundamentalMagnitude = spectrum[i];
+              fundamentalIndex = i;
+            }
+          }
+          
+          // Якщо знайдено фундаментальну частоту
+          if (fundamentalIndex > 0 && fundamentalMagnitude > 0) {
+            const fundamentalFreq = fundamentalIndex * (sampleRate / fftSize);
             
-            // Знаходимо фундаментальну частоту (найбільша амплітуда)
-            const fundamentalIndex = spectrum.indexOf(Math.max(...spectrum));
-            const fundamentalMagnitude = spectrum[fundamentalIndex];
-            
-            // Розраховуємо THD
+            // Розраховуємо THD (Total Harmonic Distortion)
             let harmonicPower = 0;
+            const harmonics = [];
+            
             for (let i = 2; i * fundamentalIndex < spectrum.length; i++) {
               const harmonicIndex = i * fundamentalIndex;
-              harmonicPower += spectrum[harmonicIndex] * spectrum[harmonicIndex];
+              const harmonicMagnitude = spectrum[harmonicIndex];
+              harmonicPower += harmonicMagnitude * harmonicMagnitude;
+              
+              harmonics.push({
+                harmonic: i,
+                frequency: harmonicIndex * (sampleRate / fftSize),
+                magnitude: harmonicMagnitude,
+                relativeMagnitude: harmonicMagnitude / fundamentalMagnitude
+              });
             }
             
-            const thd = Math.sqrt(harmonicPower) / fundamentalMagnitude * 100;
+            // Запобігання діленню на нуль
+            const thd = fundamentalMagnitude > 0 
+              ? (Math.sqrt(harmonicPower) / fundamentalMagnitude * 100) 
+              : 0;
             
             // Оцінка стабільності (вища THD означає меншу стабільність)
             const stabilityScore = 100 - Math.min(100, thd);
@@ -365,14 +925,100 @@ const BlackboxAnalyzer = () => {
             const oscillationThreshold = 30; // Поріг для виявлення коливань
             const oscillationDetected = thd > oscillationThreshold;
             
+            // Результат аналізу для даної осі
             harmonicAnalysis[axis] = {
               thd,
               stabilityScore,
-              oscillationDetected
+              oscillationDetected,
+              fundamentalFrequency: fundamentalFreq,
+              fundamentalMagnitude,
+              harmonics: harmonics.slice(0, 5), // Берем до 5 гармонік
+              pidHarmonics: {}
+            };
+            
+            // Аналіз гармонійності для PID-компонентів
+            if (hasPID) {
+              const pidComponents = [
+                { name: 'P', data: pData },
+                { name: 'I', data: iData },
+                { name: 'D', data: dData }
+              ];
+              
+              for (const component of pidComponents) {
+                if (component.data) {
+                  try {
+                    // Застосовуємо вікно Ханна
+                    const windowedData = new Array(fftSize);
+                    for (let i = 0; i < fftSize; i++) {
+                      const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
+                      windowedData[i] = component.data[i] * window;
+                    }
+                    
+                    // Підготовка для FFT
+                    const pidFft = new FFT(fftSize);
+                    const pidOut = new Array(fftSize * 2);
+                    const pidComplexData = new Array(fftSize * 2).fill(0);
+                    
+                    for (let i = 0; i < fftSize; i++) {
+                      pidComplexData[i * 2] = windowedData[i]; // Real part
+                      pidComplexData[i * 2 + 1] = 0;          // Imaginary part
+                    }
+                    
+                    // Запускаємо FFT
+                    pidFft.transform(pidOut, pidComplexData);
+                    
+                    // Обчислюємо спектр
+                    const pidSpectrum = new Array(Math.floor(fftSize / 2));
+                    for (let i = 0; i < fftSize / 2; i++) {
+                      const real = pidOut[i * 2];
+                      const imag = pidOut[i * 2 + 1];
+                      const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2);
+                      pidSpectrum[i] = magnitude;
+                    }
+                    
+                    // Перевіряємо амплітуду на фундаментальній частоті та її гармоніках
+                    const fundamentalMagnitude = pidSpectrum[fundamentalIndex];
+                    let harmonicPower = 0;
+                    
+                    for (let i = 2; i * fundamentalIndex < pidSpectrum.length; i++) {
+                      const harmonicIndex = i * fundamentalIndex;
+                      harmonicPower += pidSpectrum[harmonicIndex] * pidSpectrum[harmonicIndex];
+                    }
+                    
+                    // Знаходимо THD для компонента
+                    const componentThd = fundamentalMagnitude > 0 
+                      ? (Math.sqrt(harmonicPower) / fundamentalMagnitude * 100) 
+                      : 0;
+                    
+                    harmonicAnalysis[axis].pidHarmonics[component.name] = {
+                      thd: componentThd,
+                      fundamentalMagnitude
+                    };
+                  } catch (err) {
+                    console.error(`Помилка аналізу ${component.name}-компонента для осі ${axis}:`, err);
+                  }
+                }
+              }
+            }
+          } else {
+            // Якщо фундаментальна частота не знайдена
+            harmonicAnalysis[axis] = {
+              thd: 0,
+              stabilityScore: 100, // Припускаємо високу стабільність за відсутності сигналу
+              oscillationDetected: false,
+              pidHarmonics: {}
             };
           }
+          
         } catch (err) {
           console.error(`Помилка аналізу гармонік для осі ${axis}:`, err);
+          // Встановлюємо значення за замовчуванням при помилці
+          harmonicAnalysis[axis] = {
+            thd: 0,
+            stabilityScore: 0,
+            oscillationDetected: false,
+            pidHarmonics: {}
+          };
         }
       }
     }
@@ -380,8 +1026,8 @@ const BlackboxAnalyzer = () => {
     return { harmonicAnalysis };
   };
 
-  // Функція аналізу фільтрів
-  const analyzeFilters = () => {
+  // Функція аналізу фільтрів з покращеним використанням даних
+  const analyzeFilters = async () => {
     const filterAnalysis = {
       gyroFilters: {
         effectiveness: 0,
@@ -399,7 +1045,8 @@ const BlackboxAnalyzer = () => {
       },
       rpmFilters: {
         effectiveness: 0,
-        motorNoiseFrequencies: []
+        motorNoiseFrequencies: [],
+        detectedHarmonics: []
       }
     };
 
@@ -408,245 +1055,579 @@ const BlackboxAnalyzer = () => {
     const dtermLowpassHz = parseFloat(metadata['dterm_lowpass_hz']) || 0;
     const dynNotchMinHz = parseFloat(metadata['dyn_notch_min_hz']) || 0;
     const dynNotchMaxHz = parseFloat(metadata['dyn_notch_max_hz']) || 0;
+    const gyroRpmNotchHarmonics = parseFloat(metadata['gyro_rpm_notch_harmonics']) || 0;
+    const motorPoles = parseFloat(metadata['motor_poles']) || 14;
+    const dshotBidir = parseInt(metadata['dshot_bidir']) || 0;
     
-    // Аналіз даних гіроскопа
-    const gyroDataRaw = flightData.map(row => ({
-      x: parseFloat(row['gyroUnfilt[0]']) || 0,
-      y: parseFloat(row['gyroUnfilt[1]']) || 0,
-      z: parseFloat(row['gyroUnfilt[2]']) || 0
-    }));
+    console.log(`Метадані фільтрів: gyro_lowpass_hz=${gyroLowpassHz}, dterm_lowpass_hz=${dtermLowpassHz}`);
+    console.log(`Динамічні notch-фільтри: min=${dynNotchMinHz}Hz, max=${dynNotchMaxHz}Hz`);
+    console.log(`RPM фільтр: harmonics=${gyroRpmNotchHarmonics}, motor_poles=${motorPoles}, bidir=${dshotBidir}`);
     
-    const gyroDataFiltered = flightData.map(row => ({
-      x: parseFloat(row['gyroADC[0]']) || 0,
-      y: parseFloat(row['gyroADC[1]']) || 0,
-      z: parseFloat(row['gyroADC[2]']) || 0
-    }));
+    // Орієнтовна частота запису даних (в Гц)
+    const looptimeUs = parseFloat(metadata.looptime) || 312; // мікросекунди
+    const sampleRate = Math.round(1000000 / looptimeUs); // Гц
+    console.log(`Частота дискретизації: ${sampleRate} Гц`);
     
-    // Оцінка ефективності фільтрів гіроскопа
-    if (gyroDataRaw.length > 0 && gyroDataFiltered.length > 0) {
-      // Розраховуємо різницю між нефільтрованими та фільтрованими даними
-      const noiseReduction = {
-        x: 0,
-        y: 0,
-        z: 0
-      };
+    try {
+      // Аналіз даних гіроскопа
+      // Перевіряємо наявність як фільтрованих, так і нефільтрованих даних
+      const hasUnfilteredGyro = dataHeaders.some(h => h.startsWith('gyroUnfilt['));
+      const hasFilteredGyro = dataHeaders.some(h => h.startsWith('gyroADC['));
       
-      for (let i = 0; i < Math.min(gyroDataRaw.length, gyroDataFiltered.length); i++) {
-        noiseReduction.x += Math.abs(gyroDataRaw[i].x - gyroDataFiltered[i].x);
-        noiseReduction.y += Math.abs(gyroDataRaw[i].y - gyroDataFiltered[i].y);
-        noiseReduction.z += Math.abs(gyroDataRaw[i].z - gyroDataFiltered[i].z);
-      }
-      
-      // Нормалізуємо
-      const sampleCount = Math.min(gyroDataRaw.length, gyroDataFiltered.length);
-      noiseReduction.x /= sampleCount;
-      noiseReduction.y /= sampleCount;
-      noiseReduction.z /= sampleCount;
-      
-      // Загальна ефективність як середнє по осям
-      const gyroFilterEffectiveness = (noiseReduction.x + noiseReduction.y + noiseReduction.z) / 3;
-      
-      // Оцінка фазової затримки
-      let phaseDelay = 0;
-      if (gyroLowpassHz > 0) {
-        // Груба оцінка затримки на основі частоти відсіювання
-        phaseDelay = 1000 / (2 * Math.PI * gyroLowpassHz);
-      }
-      
-      // Рекомендована частота на основі аналізу шуму
-      const recommendedFrequency = calculateRecommendedGyroFrequency(gyroDataRaw);
-      
-      filterAnalysis.gyroFilters = {
-        effectiveness: gyroFilterEffectiveness,
-        phaseDelay,
-        recommendedFrequency
-      };
-    }
-    
-    // Аналіз шуму моторів
-    const motorData = [];
-    for (let i = 0; i < 4; i++) {
-      const colName = `motor[${i}]`;
-      if (dataHeaders.includes(colName)) {
-        const data = flightData.map(row => parseFloat(row[colName]) || 0);
-        motorData.push(data);
-      }
-    }
-    
-    // Ідентифікація шумів моторів
-    if (motorData.length > 0) {
-      const motorNoiseFrequencies = [];
-      
-      for (let motorIndex = 0; motorIndex < motorData.length; motorIndex++) {
-        try {
-          const fftSize = 1024;
-          const data = motorData[motorIndex].slice(0, Math.min(fftSize, motorData[motorIndex].length));
+      if (hasUnfilteredGyro && hasFilteredGyro) {
+        const gyroDataRaw = [];
+        const gyroDataFiltered = [];
+        
+        // Розмір порції для обробки
+        const chunkSize = 500;
+        // Обмежуємо кількість даних для аналізу (2048 точок максимум)
+        const maxSamples = 2048;
+        const collectSize = Math.min(flightData.length, maxSamples);
+        
+        // Збираємо дані порційно
+        await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
+          for (const row of chunk) {
+            const rawData = {
+              x: parseFloat(row['gyroUnfilt[0]']) || 0,
+              y: parseFloat(row['gyroUnfilt[1]']) || 0,
+              z: parseFloat(row['gyroUnfilt[2]']) || 0
+            };
+            
+            const filteredData = {
+              x: parseFloat(row['gyroADC[0]']) || 0,
+              y: parseFloat(row['gyroADC[1]']) || 0,
+              z: parseFloat(row['gyroADC[2]']) || 0
+            };
+            
+            gyroDataRaw.push(rawData);
+            gyroDataFiltered.push(filteredData);
+          }
+        });
+        
+        // Оцінка ефективності фільтрів гіроскопа
+        if (gyroDataRaw.length > 0 && gyroDataFiltered.length > 0) {
+          // Розраховуємо різницю між нефільтрованими та фільтрованими даними
+          const noiseReduction = {
+            x: 0,
+            y: 0,
+            z: 0
+          };
           
-          if (data.length > 0) {
-            // Доповнюємо нулями
-            const paddedData = [...data, ...Array(fftSize - data.length).fill(0)];
+          for (let i = 0; i < Math.min(gyroDataRaw.length, gyroDataFiltered.length); i++) {
+            noiseReduction.x += Math.abs(gyroDataRaw[i].x - gyroDataFiltered[i].x);
+            noiseReduction.y += Math.abs(gyroDataRaw[i].y - gyroDataFiltered[i].y);
+            noiseReduction.z += Math.abs(gyroDataRaw[i].z - gyroDataFiltered[i].z);
+          }
+          
+          // Нормалізуємо
+          const sampleCount = Math.min(gyroDataRaw.length, gyroDataFiltered.length);
+          noiseReduction.x /= sampleCount;
+          noiseReduction.y /= sampleCount;
+          noiseReduction.z /= sampleCount;
+          
+          // Загальна ефективність як середнє по осям
+          const gyroFilterEffectiveness = (noiseReduction.x + noiseReduction.y + noiseReduction.z) / 3;
+          
+          // Оцінка фазової затримки
+          let phaseDelay = 0;
+          if (gyroLowpassHz > 0) {
+            // Груба оцінка затримки на основі частоти відсіювання
+            phaseDelay = 1000 / (2 * Math.PI * gyroLowpassHz);
+          }
+          
+          // Рекомендована частота на основі аналізу шуму
+          const recommendedFrequency = await calculateRecommendedGyroFrequency(gyroDataRaw, sampleRate);
+          
+          filterAnalysis.gyroFilters = {
+            effectiveness: gyroFilterEffectiveness,
+            phaseDelay,
+            recommendedFrequency,
+            noiseReduction: {
+              x: noiseReduction.x,
+              y: noiseReduction.y,
+              z: noiseReduction.z
+            }
+          };
+        }
+        
+        // Аналіз шуму моторів з використанням даних eRPM
+        const hasERPM = dataHeaders.some(h => h.startsWith('eRPM['));
+        const hasMotor = dataHeaders.some(h => h.startsWith('motor['));
+        
+        if (hasERPM && hasMotor) {
+          // Збираємо дані моторів та їх обертів
+          const motorData = [];
+          const eRpmData = [];
+          
+          for (let motorIdx = 0; motorIdx < 4; motorIdx++) {
+            const motorCol = `motor[${motorIdx}]`;
+            const eRpmCol = `eRPM[${motorIdx}]`;
             
-            const fft = new FFT(fftSize, 1000);
-            fft.forward(paddedData);
-            
-            // Знаходимо пікові частоти шуму
-            const peakFrequencies = [];
-            
-            for (let i = 1; i < fftSize / 2 - 1; i++) {
-              const magnitude = Math.sqrt(fft.real[i] * fft.real[i] + fft.imag[i] * fft.imag[i]);
-              const freq = i * (1000 / fftSize);
+            if (dataHeaders.includes(motorCol) && dataHeaders.includes(eRpmCol)) {
+              const motorValues = [];
+              const eRpmValues = [];
               
-              if (magnitude > 10 && 
-                  magnitude > Math.sqrt(fft.real[i-1] * fft.real[i-1] + fft.imag[i-1] * fft.imag[i-1]) &&
-                  magnitude > Math.sqrt(fft.real[i+1] * fft.real[i+1] + fft.imag[i+1] * fft.imag[i+1])) {
-                peakFrequencies.push({ frequency: freq, magnitude });
+              // Збираємо дані порційно
+              await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
+                for (const row of chunk) {
+                  const motorValue = parseFloat(row[motorCol]) || 0;
+                  const eRpmValue = parseFloat(row[eRpmCol]) || 0;
+                  
+                  motorValues.push(motorValue);
+                  eRpmValues.push(eRpmValue);
+                }
+              });
+              
+              motorData.push(motorValues);
+              eRpmData.push(eRpmValues);
+            }
+          }
+          
+          // Аналіз шуму моторів з урахуванням eRPM
+          if (motorData.length > 0 && eRpmData.length > 0) {
+            const motorNoiseFrequencies = [];
+            const rpmHarmonics = [];
+            
+            // Аналізуємо кожен мотор
+            for (let motorIndex = 0; motorIndex < motorData.length; motorIndex++) {
+              try {
+                const motorValues = motorData[motorIndex];
+                const eRpmValues = eRpmData[motorIndex];
+                
+                // Знаходимо середні оберти мотора
+                const avgERPM = eRpmValues.reduce((sum, rpm) => sum + rpm, 0) / eRpmValues.length;
+                
+                // Частота обертання в Гц (eRPM / 60)
+                const rotationFreqHz = avgERPM / 60;
+                
+                // Базова частота шуму мотора (залежить від кількості полюсів)
+                // Для безколекторних моторів з N полюсами = (eRPM * N / 60) / 2
+                const baseNoiseFreq = (avgERPM * motorPoles) / (60 * 2);
+                
+                // Гармоніки шуму мотора
+                const harmonics = [];
+                for (let harmonic = 1; harmonic <= gyroRpmNotchHarmonics; harmonic++) {
+                  harmonics.push({
+                    harmonic,
+                    frequency: baseNoiseFreq * harmonic,
+                    motorIndex,
+                    averageERPM: avgERPM
+                  });
+                }
+                
+                // Додаємо знайдені гармоніки
+                rpmHarmonics.push(...harmonics);
+                
+                // Аналізуємо спектр мотора для пошуку піків шуму
+                const fftSize = 512;
+                if (motorValues.length >= fftSize) {
+                  // Застосовуємо вікно Ханна
+                  const windowedData = new Array(fftSize);
+                  for (let i = 0; i < fftSize; i++) {
+                    const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
+                    windowedData[i] = motorValues[i] * window;
+                  }
+                  
+                  // Підготовка для FFT
+                  const fft = new FFT(fftSize);
+                  const out = new Array(fftSize * 2);
+                  const complexData = new Array(fftSize * 2).fill(0);
+                  
+                  for (let i = 0; i < fftSize; i++) {
+                    complexData[i * 2] = windowedData[i]; // Real part
+                    complexData[i * 2 + 1] = 0;          // Imaginary part
+                  }
+                  
+                  // Запускаємо FFT
+                  fft.transform(out, complexData);
+                  
+                  // Обчислюємо спектр
+                  const frequencies = [];
+                  for (let i = 1; i < fftSize / 2; i++) {
+                    const real = out[i * 2];
+                    const imag = out[i * 2 + 1];
+                    const freq = i * (sampleRate / fftSize);
+                    const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2);
+                    frequencies.push({ frequency: freq, magnitude });
+                  }
+                  
+                  // Знаходимо локальні максимуми
+                  const peaks = [];
+                  for (let i = 1; i < frequencies.length - 1; i++) {
+                    if (frequencies[i].magnitude > frequencies[i-1].magnitude && 
+                        frequencies[i].magnitude > frequencies[i+1].magnitude &&
+                        frequencies[i].magnitude > 0.01) {
+                      peaks.push(frequencies[i]);
+                    }
+                  }
+                  
+                  // Сортуємо за магнітудою і беремо топ-3
+                  peaks.sort((a, b) => b.magnitude - a.magnitude);
+                  const topFrequencies = peaks.slice(0, 3);
+                  
+                  motorNoiseFrequencies.push({
+                    motorIndex,
+                    frequencies: topFrequencies,
+                    averageERPM: avgERPM
+                  });
+                }
+              } catch (err) {
+                console.error(`Помилка аналізу шуму мотора ${motorIndex}:`, err);
               }
             }
             
-            // Сортуємо за амплітудою і беремо топ-3
-            peakFrequencies.sort((a, b) => b.magnitude - a.magnitude);
-            const topFrequencies = peakFrequencies.slice(0, 3);
+            // Обчислюємо ефективність RPM фільтрів, порівнюючи шуми на частотах гармонік
+            const rpmFilterEffectiveness = await calculateRpmFilterEffectiveness(
+              rpmHarmonics, gyroDataRaw, gyroDataFiltered, sampleRate
+            );
             
-            motorNoiseFrequencies.push({
-              motorIndex,
-              frequencies: topFrequencies
-            });
+            filterAnalysis.rpmFilters = {
+              effectiveness: rpmFilterEffectiveness,
+              motorNoiseFrequencies,
+              detectedHarmonics: rpmHarmonics
+            };
           }
-        } catch (err) {
-          console.error(`Помилка аналізу шуму мотора ${motorIndex}:`, err);
         }
-      }
-      
-      filterAnalysis.rpmFilters.motorNoiseFrequencies = motorNoiseFrequencies;
-      filterAnalysis.rpmFilters.effectiveness = calculateRpmFilterEffectiveness(motorNoiseFrequencies, gyroDataRaw, gyroDataFiltered);
-    }
-    
-    // Доповнюємо аналіз notch-фільтрів
-    if (dynNotchMinHz > 0 && dynNotchMaxHz > 0) {
-      const identifiedNoiseFrequencies = [];
-      
-      // Аналізуємо спектр гіроскопа для виявлення шумів, які потрібно фільтрувати
-      for (const axis of ['x', 'y', 'z']) {
-        const axisIndex = { x: 0, y: 1, z: 2 }[axis];
-        const gyroCol = `gyroUnfilt[${axisIndex}]`;
         
-        if (dataHeaders.includes(gyroCol)) {
-          try {
-            const fftSize = 1024;
-            const data = flightData.map(row => parseFloat(row[gyroCol]) || 0).slice(0, fftSize);
+        // Аналіз notch-фільтрів
+        if (dynNotchMinHz > 0 && dynNotchMaxHz > 0) {
+          const identifiedNoiseFrequencies = [];
+          
+          // Аналізуємо спектр гіроскопа для виявлення шумів, які потрібно фільтрувати
+          for (const axis of ['x', 'y', 'z']) {
+            const axisIndex = { x: 0, y: 1, z: 2 }[axis];
+            const gyroCol = `gyroUnfilt[${axisIndex}]`;
             
-            if (data.length > 0) {
-              // Доповнюємо нулями
-              const paddedData = [...data, ...Array(fftSize - data.length).fill(0)];
-              
-              const fft = new FFT(fftSize, 1000);
-              fft.forward(paddedData);
-              
-              // Шукаємо шумові піки в діапазоні dynNotchMinHz до dynNotchMaxHz
-              for (let i = 1; i < fftSize / 2 - 1; i++) {
-                const freq = i * (1000 / fftSize);
+            if (dataHeaders.includes(gyroCol)) {
+              try {
+                const fftSize = 1024;
+                const gyroData = [];
                 
-                if (freq >= dynNotchMinHz && freq <= dynNotchMaxHz) {
-                  const magnitude = Math.sqrt(fft.real[i] * fft.real[i] + fft.imag[i] * fft.imag[i]);
+                // Збираємо дані порційно
+                await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
+                  for (const row of chunk) {
+                    const value = parseFloat(row[gyroCol]) || 0;
+                    if (!isNaN(value)) {
+                      gyroData.push(value);
+                      if (gyroData.length >= fftSize) break;
+                    }
+                  }
+                });
+                
+                if (gyroData.length > 0) {
+                  // Застосовуємо вікно Ханна
+                  const windowedData = new Array(fftSize);
+                  for (let i = 0; i < Math.min(fftSize, gyroData.length); i++) {
+                    const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
+                    windowedData[i] = gyroData[i] * window;
+                  }
                   
-                  if (magnitude > 20 && 
-                      magnitude > Math.sqrt(fft.real[i-1] * fft.real[i-1] + fft.imag[i-1] * fft.imag[i-1]) &&
-                      magnitude > Math.sqrt(fft.real[i+1] * fft.real[i+1] + fft.imag[i+1] * fft.imag[i+1])) {
+                  // Доповнюємо нулями, якщо потрібно
+                  for (let i = gyroData.length; i < fftSize; i++) {
+                    windowedData[i] = 0;
+                  }
+                  
+                  // Підготовка для FFT
+                  const fft = new FFT(fftSize);
+                  const out = new Array(fftSize * 2);
+                  const complexData = new Array(fftSize * 2).fill(0);
+                  
+                  for (let i = 0; i < fftSize; i++) {
+                    complexData[i * 2] = windowedData[i]; // Real part
+                    complexData[i * 2 + 1] = 0;          // Imaginary part
+                  }
+                  
+                  // Запускаємо FFT
+                  fft.transform(out, complexData);
+                  
+                  // Обчислюємо спектр та шукаємо піки шуму в діапазоні notch фільтра
+                  for (let i = 1; i < fftSize / 2 - 1; i++) {
+                    const freq = i * (sampleRate / fftSize);
                     
-                    // Перевіряємо, чи ця частота вже була додана
-                    const existingFreq = identifiedNoiseFrequencies.find(f => Math.abs(f.frequency - freq) < 5);
-                    
-                    if (!existingFreq) {
-                      identifiedNoiseFrequencies.push({
-                        frequency: freq,
-                        magnitude,
-                        axis
-                      });
+                    if (freq >= dynNotchMinHz && freq <= dynNotchMaxHz) {
+                      const real = out[i * 2];
+                      const imag = out[i * 2 + 1];
+                      const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2);
+                      
+                      const prevReal = out[(i-1) * 2];
+                      const prevImag = out[(i-1) * 2 + 1];
+                      const prevMagnitude = Math.sqrt(prevReal * prevReal + prevImag * prevImag) / (fftSize/2);
+                      
+                      const nextReal = out[(i+1) * 2];
+                      const nextImag = out[(i+1) * 2 + 1];
+                      const nextMagnitude = Math.sqrt(nextReal * nextReal + nextImag * nextImag) / (fftSize/2);
+                      
+                      // Перевіряємо, чи це локальний максимум і має суттєву амплітуду
+                      if (magnitude > 0.01 && magnitude > prevMagnitude && magnitude > nextMagnitude) {
+                        
+                        // Перевіряємо, чи ця частота вже була додана
+                        const existingFreq = identifiedNoiseFrequencies.find(f => Math.abs(f.frequency - freq) < 5);
+                        
+                        if (!existingFreq) {
+                          identifiedNoiseFrequencies.push({
+                            frequency: freq,
+                            magnitude,
+                            axis
+                          });
+                        }
+                      }
                     }
                   }
                 }
+              } catch (err) {
+                console.error(`Помилка аналізу notch-фільтрів для осі ${axis}:`, err);
               }
             }
-          } catch (err) {
-            console.error(`Помилка аналізу notch-фільтрів для осі ${axis}:`, err);
           }
-        }
-      }
-      
-      // Сортуємо за амплітудою
-      identifiedNoiseFrequencies.sort((a, b) => b.magnitude - a.magnitude);
-      
-      // Оцінка ефективності notch-фільтрів
-      let notchEffectiveness = 0;
-      if (identifiedNoiseFrequencies.length > 0) {
-        // Порівнюємо амплітуди шумів з нефільтрованими та фільтрованими даними
-        const reductionRatios = [];
-        
-        for (const noiseFreq of identifiedNoiseFrequencies) {
-          const axis = noiseFreq.axis;
-          const axisIndex = { x: 0, y: 1, z: 2 }[axis];
           
-          try {
-            const fftSizeSmall = 256; // Менший розмір для швидшого обчислення
+          // Сортуємо за амплітудою
+          identifiedNoiseFrequencies.sort((a, b) => b.magnitude - a.magnitude);
+          
+          // Оцінка ефективності notch-фільтрів
+          let notchEffectiveness = 0;
+          if (identifiedNoiseFrequencies.length > 0) {
+            // Порівнюємо амплітуди шумів з нефільтрованими та фільтрованими даними
+            const reductionRatios = [];
             
-            // Нефільтровані дані
-            const rawData = flightData.map(row => parseFloat(row[`gyroUnfilt[${axisIndex}]`]) || 0).slice(0, fftSizeSmall);
-            const rawFft = new FFT(fftSizeSmall, 1000);
-            rawFft.forward([...rawData, ...Array(fftSizeSmall - rawData.length).fill(0)]);
-            
-            // Фільтровані дані
-            const filteredData = flightData.map(row => parseFloat(row[`gyroADC[${axisIndex}]`]) || 0).slice(0, fftSizeSmall);
-            const filteredFft = new FFT(fftSizeSmall, 1000);
-            filteredFft.forward([...filteredData, ...Array(fftSizeSmall - filteredData.length).fill(0)]);
-            
-            // Знаходимо амплітуду на частоті шуму
-            const freqIndex = Math.round(noiseFreq.frequency / (1000 / fftSizeSmall));
-            
-            if (freqIndex > 0 && freqIndex < fftSizeSmall / 2) {
-              const rawMagnitude = Math.sqrt(rawFft.real[freqIndex] * rawFft.real[freqIndex] + 
-                                            rawFft.imag[freqIndex] * rawFft.imag[freqIndex]);
+            for (const noiseFreq of identifiedNoiseFrequencies.slice(0, 3)) { // Аналізуємо топ-3 частоти
+              const axis = noiseFreq.axis;
+              const axisIndex = { x: 0, y: 1, z: 2 }[axis];
               
-              const filteredMagnitude = Math.sqrt(filteredFft.real[freqIndex] * filteredFft.real[freqIndex] + 
-                                                 filteredFft.imag[freqIndex] * filteredFft.imag[freqIndex]);
-              
-              if (rawMagnitude > 0) {
-                const reductionRatio = 1 - (filteredMagnitude / rawMagnitude);
-                reductionRatios.push(reductionRatio);
+              try {
+                const fftSizeSmall = 256; // Менший розмір для швидшого обчислення
+                
+                // Нефільтровані дані
+                const rawData = [];
+                // Фільтровані дані
+                const filteredData = [];
+                
+                // Збираємо дані порційно
+                await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
+                  for (const row of chunk) {
+                    const rawValue = parseFloat(row[`gyroUnfilt[${axisIndex}]`]) || 0;
+                    const filteredValue = parseFloat(row[`gyroADC[${axisIndex}]`]) || 0;
+                    
+                    rawData.push(rawValue);
+                    filteredData.push(filteredValue);
+                    
+                    if (rawData.length >= fftSizeSmall) break;
+                  }
+                });
+                
+                // Застосовуємо вікно Ханна до даних
+                const windowedRawData = new Array(fftSizeSmall);
+                const windowedFilteredData = new Array(fftSizeSmall);
+                
+                for (let i = 0; i < Math.min(fftSizeSmall, rawData.length); i++) {
+                  const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSizeSmall - 1)));
+                  windowedRawData[i] = rawData[i] * window;
+                  windowedFilteredData[i] = filteredData[i] * window;
+                }
+                
+                // Доповнюємо нулями
+                for (let i = rawData.length; i < fftSizeSmall; i++) {
+                  windowedRawData[i] = 0;
+                  windowedFilteredData[i] = 0;
+                }
+                
+                // FFT для нефільтрованих даних
+                const rawFft = new FFT(fftSizeSmall);
+                const rawOut = new Array(fftSizeSmall * 2);
+                const rawComplexData = new Array(fftSizeSmall * 2).fill(0);
+                
+                for (let i = 0; i < fftSizeSmall; i++) {
+                  rawComplexData[i * 2] = windowedRawData[i]; // Real part
+                  rawComplexData[i * 2 + 1] = 0;             // Imaginary part
+                }
+                
+                rawFft.transform(rawOut, rawComplexData);
+                
+                // FFT для фільтрованих даних
+                const filteredFft = new FFT(fftSizeSmall);
+                const filteredOut = new Array(fftSizeSmall * 2);
+                const filteredComplexData = new Array(fftSizeSmall * 2).fill(0);
+                
+                for (let i = 0; i < fftSizeSmall; i++) {
+                  filteredComplexData[i * 2] = windowedFilteredData[i]; // Real part
+                  filteredComplexData[i * 2 + 1] = 0;                  // Imaginary part
+                }
+                
+                filteredFft.transform(filteredOut, filteredComplexData);
+                
+                // Знаходимо амплітуду на частоті шуму
+                const freqIndex = Math.round(noiseFreq.frequency / (sampleRate / fftSizeSmall));
+                
+                if (freqIndex > 0 && freqIndex < fftSizeSmall / 2) {
+                  const rawReal = rawOut[freqIndex * 2];
+                  const rawImag = rawOut[freqIndex * 2 + 1];
+                  const rawMagnitude = Math.sqrt(rawReal * rawReal + rawImag * rawImag) / (fftSizeSmall/2);
+                  
+                  const filteredReal = filteredOut[freqIndex * 2];
+                  const filteredImag = filteredOut[freqIndex * 2 + 1];
+                  const filteredMagnitude = Math.sqrt(filteredReal * filteredReal + filteredImag * filteredImag) / (fftSizeSmall/2);
+                  
+                  if (rawMagnitude > 0) {
+                    const reductionRatio = 1 - (filteredMagnitude / rawMagnitude);
+                    reductionRatios.push(reductionRatio);
+                    
+                    // Додаємо інформацію про ефективність фільтрації для цієї частоти
+                    noiseFreq.filterEffectiveness = reductionRatio;
+                  }
+                }
+              } catch (err) {
+                console.error(`Помилка оцінки ефективності notch-фільтрів для частоти ${noiseFreq.frequency}:`, err);
               }
             }
-          } catch (err) {
-            console.error(`Помилка оцінки ефективності notch-фільтрів для частоти ${noiseFreq.frequency}:`, err);
+            
+            // Середня ефективність
+            if (reductionRatios.length > 0) {
+              notchEffectiveness = reductionRatios.reduce((sum, val) => sum + val, 0) / reductionRatios.length;
+            }
           }
+          
+          filterAnalysis.notchFilters = {
+            effectiveness: notchEffectiveness,
+            identifiedNoiseFrequencies: identifiedNoiseFrequencies.slice(0, 5) // Беремо топ-5
+          };
         }
         
-        // Середня ефективність
-        if (reductionRatios.length > 0) {
-          notchEffectiveness = reductionRatios.reduce((sum, val) => sum + val, 0) / reductionRatios.length;
+        // Аналіз D-term фільтрів
+        // В даному випадку робимо спрощений аналіз через відсутність прямого доступу до D-term сигналів
+        const dTermSignal = dataHeaders.some(h => h.startsWith('axisD['));
+        
+        if (dtermLowpassHz > 0) {
+          const phaseDelay = 1000 / (2 * Math.PI * dtermLowpassHz);
+          
+          if (dTermSignal) {
+            // Спробуємо проаналізувати D-term сигнали безпосередньо
+            const dTermData = [];
+            
+            // Збираємо D-term дані для всіх осей
+            for (let axisIdx = 0; axisIdx < 3; axisIdx++) {
+              const dTermCol = `axisD[${axisIdx}]`;
+              
+              if (dataHeaders.includes(dTermCol)) {
+                const axisData = [];
+                
+                // Збираємо дані порційно
+                await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
+                  for (const row of chunk) {
+                    const value = parseFloat(row[dTermCol]) || 0;
+                    axisData.push(value);
+                    if (axisData.length >= 1024) break;
+                  }
+                });
+                
+                dTermData.push(axisData);
+              }
+            }
+            
+            // Аналізуємо спектр D-term, якщо є дані
+            if (dTermData.length > 0 && dTermData[0].length > 0) {
+              // Використаємо дані з першої осі, що має найбільше значень
+              let bestAxisData = dTermData[0];
+              for (let i = 1; i < dTermData.length; i++) {
+                if (dTermData[i].length > bestAxisData.length) {
+                  bestAxisData = dTermData[i];
+                }
+              }
+              
+              // Для FFT потрібна довжина, що є степенем 2
+              const fftSize = 512;
+              if (bestAxisData.length >= fftSize) {
+                // Застосовуємо вікно Ханна
+                const windowedData = new Array(fftSize);
+                for (let i = 0; i < fftSize; i++) {
+                  const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
+                  windowedData[i] = bestAxisData[i] * window;
+                }
+                
+                // Підготовка для FFT
+                const fft = new FFT(fftSize);
+                const out = new Array(fftSize * 2);
+                const complexData = new Array(fftSize * 2).fill(0);
+                
+                for (let i = 0; i < fftSize; i++) {
+                  complexData[i * 2] = windowedData[i]; // Real part
+                  complexData[i * 2 + 1] = 0;          // Imaginary part
+                }
+                
+                // Запускаємо FFT
+                fft.transform(out, complexData);
+                
+                // Обчислюємо спектр та знаходимо рівень шуму
+                let totalMagnitude = 0;
+                let highFreqMagnitude = 0;
+                
+                for (let i = 1; i < fftSize / 2; i++) {
+                  const real = out[i * 2];
+                  const imag = out[i * 2 + 1];
+                  const freq = i * (sampleRate / fftSize);
+                  const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2);
+                  
+                  totalMagnitude += magnitude;
+                  
+                  // Рахуємо окремо шум вище 100 Гц
+                  if (freq > 100) {
+                    highFreqMagnitude += magnitude;
+                  }
+                }
+                
+                // Оцінка ефективності - співвідношення шуму на високих частотах до загального шуму
+                // Нижче значення означає краще фільтрування
+                const noiseRatio = highFreqMagnitude / totalMagnitude;
+                const effectiveness = 1 - Math.min(1, noiseRatio);
+                
+                // Рекомендована частота D-term фільтра (яка забезпечує компроміс між затримкою і шумом)
+                const recommendedFrequency = calculateRecommendedDtermFrequency(gyroDataRaw, sampleRate);
+                
+                filterAnalysis.dtermFilters = {
+                  effectiveness,
+                  phaseDelay,
+                  recommendedFrequency,
+                  noiseRatio
+                };
+              } else {
+                // Використовуємо спрощений аналіз
+                const effectiveness = calculateDtermFilterEffectiveness(dtermLowpassHz);
+                const recommendedFrequency = calculateRecommendedDtermFrequency(gyroDataRaw, sampleRate);
+                
+                filterAnalysis.dtermFilters = {
+                  effectiveness,
+                  phaseDelay,
+                  recommendedFrequency
+                };
+              }
+            } else {
+              // Використовуємо спрощений аналіз, якщо немає D-term даних
+              const effectiveness = calculateDtermFilterEffectiveness(dtermLowpassHz);
+              const recommendedFrequency = calculateRecommendedDtermFrequency(gyroDataRaw, sampleRate);
+              
+              filterAnalysis.dtermFilters = {
+                effectiveness,
+                phaseDelay,
+                recommendedFrequency
+              };
+            }
+          } else {
+            // Оцінка балансу між фільтрацією та затримкою
+            const effectiveness = calculateDtermFilterEffectiveness(dtermLowpassHz);
+            
+            // Рекомендована частота D-term фільтра
+            const recommendedFrequency = calculateRecommendedDtermFrequency(gyroDataRaw, sampleRate);
+            
+            filterAnalysis.dtermFilters = {
+              effectiveness,
+              phaseDelay,
+              recommendedFrequency
+            };
+          }
         }
+      } else {
+        console.warn("Відсутні дані gyroUnfilt або gyroADC для аналізу фільтрів");
       }
-      
-      filterAnalysis.notchFilters = {
-        effectiveness: notchEffectiveness,
-        identifiedNoiseFrequencies: identifiedNoiseFrequencies.slice(0, 5) // Беремо топ-5
-      };
-    }
-    
-    // Аналіз D-term фільтрів
-    // В даному випадку робимо спрощений аналіз через відсутність прямого доступу до D-term сигналів
-    if (dtermLowpassHz > 0) {
-      const phaseDelay = 1000 / (2 * Math.PI * dtermLowpassHz);
-      
-      // Оцінка балансу між фільтрацією та затримкою
-      const effectiveness = calculateDtermFilterEffectiveness(dtermLowpassHz);
-      
-      // Рекомендована частота D-term фільтра
-      const recommendedFrequency = calculateRecommendedDtermFrequency(gyroDataRaw);
-      
-      filterAnalysis.dtermFilters = {
-        effectiveness,
-        phaseDelay,
-        recommendedFrequency
-      };
+    } catch (error) {
+      console.error("Помилка аналізу фільтрів:", error);
     }
     
     return { filterAnalysis };
@@ -675,14 +1656,26 @@ const BlackboxAnalyzer = () => {
       // Доповнюємо до розміру FFT
       combinedData = [...combinedData, ...Array(fftSize - combinedData.length).fill(0)];
       
-      const fft = new FFT(fftSize, 1000);
-      fft.forward(combinedData);
+      const fft = new FFT(fftSize);
+      const out = new Array(fftSize * 2);
+      
+      // Prepare complex data
+      const complexData = new Array(fftSize * 2).fill(0);
+      for (let i = 0; i < fftSize; i++) {
+        complexData[i * 2] = combinedData[i]; // Real part
+        complexData[i * 2 + 1] = 0;           // Imaginary part
+      }
+      
+      // Run the FFT
+      fft.transform(out, complexData);
       
       // Отримуємо амплітудний спектр
       const spectrum = [];
       for (let i = 0; i < fftSize / 2; i++) {
+        const real = out[i * 2];
+        const imag = out[i * 2 + 1];
         const frequency = i * (1000 / fftSize);
-        const magnitude = Math.sqrt(fft.real[i] * fft.real[i] + fft.imag[i] * fft.imag[i]);
+        const magnitude = Math.sqrt(real * real + imag * imag);
         spectrum.push({ frequency, magnitude });
       }
       
@@ -775,27 +1768,45 @@ const BlackboxAnalyzer = () => {
         const paddedFilteredData = [...filteredData, ...Array(fftSize - filteredData.length).fill(0)];
         
         // FFT для сирих даних
-        const rawFft = new FFT(fftSize, 1000);
-        rawFft.forward(paddedRawData);
+        const rawFft = new FFT(fftSize);
+        const rawOut = new Array(fftSize * 2);
+        
+        // Prepare raw complex data
+        const rawComplexData = new Array(fftSize * 2).fill(0);
+        for (let i = 0; i < fftSize; i++) {
+          rawComplexData[i * 2] = paddedRawData[i]; // Real part
+          rawComplexData[i * 2 + 1] = 0;           // Imaginary part
+        }
+        
+        // Run the FFT for raw data
+        rawFft.transform(rawOut, rawComplexData);
         
         // FFT для фільтрованих даних
-        const filteredFft = new FFT(fftSize, 1000);
-        filteredFft.forward(paddedFilteredData);
+        const filteredFft = new FFT(fftSize);
+        const filteredOut = new Array(fftSize * 2);
+        
+        // Prepare filtered complex data
+        const filteredComplexData = new Array(fftSize * 2).fill(0);
+        for (let i = 0; i < fftSize; i++) {
+          filteredComplexData[i * 2] = paddedFilteredData[i]; // Real part
+          filteredComplexData[i * 2 + 1] = 0;                // Imaginary part
+        }
+        
+        // Run the FFT for filtered data
+        filteredFft.transform(filteredOut, filteredComplexData);
         
         // Перевіряємо кожну частоту мотора
         for (const freq of motorFrequencies) {
           const freqIndex = Math.round(freq / (1000 / fftSize));
           
           if (freqIndex > 0 && freqIndex < fftSize / 2) {
-            const rawMagnitude = Math.sqrt(
-              rawFft.real[freqIndex] * rawFft.real[freqIndex] + 
-              rawFft.imag[freqIndex] * rawFft.imag[freqIndex]
-            );
+            const rawReal = rawOut[freqIndex * 2];
+            const rawImag = rawOut[freqIndex * 2 + 1];
+            const rawMagnitude = Math.sqrt(rawReal * rawReal + rawImag * rawImag);
             
-            const filteredMagnitude = Math.sqrt(
-              filteredFft.real[freqIndex] * filteredFft.real[freqIndex] + 
-              filteredFft.imag[freqIndex] * filteredFft.imag[freqIndex]
-            );
+            const filteredReal = filteredOut[freqIndex * 2];
+            const filteredImag = filteredOut[freqIndex * 2 + 1];
+            const filteredMagnitude = Math.sqrt(filteredReal * filteredReal + filteredImag * filteredImag);
             
             if (rawMagnitude > 0) {
               // Коефіцієнт зменшення шуму на цій частоті
