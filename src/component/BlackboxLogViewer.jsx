@@ -1,120 +1,38 @@
 import React, { useState, useEffect, useRef } from 'react';
 import _ from 'lodash';
+import useBlackboxStore from '../store/blackboxStore';
 
 const BlackboxLogViewer = () => {
-  const [logData, setLogData] = useState(null);
-  const [metadata, setMetadata] = useState({});
-  const [flightData, setFlightData] = useState([]);
-  const [visibleFlightData, setVisibleFlightData] = useState([]);
+  // Отримуємо дані та функції зі сховища Zustand
+  const {
+    logData,
+    metadata,
+    flightData,
+    dataHeaders,
+    selectedColumns,
+    isLoading,
+    errorMessage,
+    parseBlackboxLog,
+    toggleColumnSelection,
+    resetColumnSelection,
+    setErrorMessage
+  } = useBlackboxStore();
+
+  // Локальний стан для UI компонента
   const [activeTab, setActiveTab] = useState('metadata');
-  const [isLoading, setIsLoading] = useState(false);
-  const [dataHeaders, setDataHeaders] = useState([]);
-  const [errorMessage, setErrorMessage] = useState('');
+  const [visibleFlightData, setVisibleFlightData] = useState([]);
+  const [columnSelectOpen, setColumnSelectOpen] = useState(false);
   
-  // Virtual scrolling state
+  // Стан для віртуального скролінгу
   const [scrollTop, setScrollTop] = useState(0);
   const [viewportHeight, setViewportHeight] = useState(0);
   const tableRef = useRef(null);
   const bodyRef = useRef(null);
   const headerRef = useRef(null);
-  const rowHeight = 40; // Height of each row in pixels
-  const bufferSize = 20; // Number of extra rows to render above and below the viewport
+  const rowHeight = 40; // Висота кожного рядка в пікселях
+  const bufferSize = 20; // Кількість додаткових рядків для рендерингу вище та нижче вікна перегляду
   
-  // Column selection/visibility
-  const [selectedColumns, setSelectedColumns] = useState([]);
-  const [columnSelectOpen, setColumnSelectOpen] = useState(false);
-  
-  const parseBlackboxLog = (content) => {
-    setIsLoading(true);
-    setErrorMessage('');
-    
-    // Using setTimeout to prevent UI blocking during parsing
-    setTimeout(() => {
-      try {
-        // Split the content by lines
-        const lines = content.split('\n');
-        const newMetadata = {};
-        let flightDataHeaderIndex = -1;
-        
-        // First pass - extract metadata and find where flight data begins
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i].trim();
-          
-          // Skip empty lines
-          if (!line) continue;
-          
-          // Check if this line starts the flight data section
-          if (line.startsWith('loopIteration')) {
-            flightDataHeaderIndex = i;
-            break;
-          }
-          
-          // Process metadata lines (format: key | value)
-          const parts = line.split(' | ');
-          if (parts.length === 2) {
-            newMetadata[parts[0].trim()] = parts[1].trim();
-          }
-        }
-        
-        // Set the metadata state
-        setMetadata(newMetadata);
-        
-        // If we found the flight data section, parse it
-        if (flightDataHeaderIndex !== -1) {
-          // Extract the header and data rows
-          const header = lines[flightDataHeaderIndex].split(' | ').map(h => h.trim());
-          setDataHeaders(header);
-          
-          // Set initial selected columns - first column plus up to 9 more important ones
-          let initialSelectedColumns = [header[0]]; // Always include first column
-          
-          // Add important columns if they exist
-          const importantColumns = ['time', 'gyroADC[0]', 'gyroADC[1]', 'gyroADC[2]', 'motor[0]', 'motor[1]', 'motor[2]', 'motor[3]'];
-          importantColumns.forEach(col => {
-            const colIndex = header.findIndex(h => h.toLowerCase() === col.toLowerCase());
-            if (colIndex !== -1) {
-              initialSelectedColumns.push(header[colIndex]);
-            }
-          });
-          
-          // Limit to 10 total columns
-          initialSelectedColumns = initialSelectedColumns.slice(0, 10);
-          setSelectedColumns(initialSelectedColumns);
-          
-          // Parse the flight data rows
-          const parsedFlightData = [];
-          
-          for (let i = flightDataHeaderIndex + 1; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (!line) continue;
-            
-            const rowData = line.split(' | ');
-            if (rowData.length === header.length) {
-              const rowObj = {};
-              header.forEach((key, index) => {
-                rowObj[key] = rowData[index].trim();
-              });
-              parsedFlightData.push(rowObj);
-            }
-          }
-          
-          setFlightData(parsedFlightData);
-          updateVisibleData(0, parsedFlightData, viewportHeight);
-        } else {
-          setErrorMessage('Could not find flight data section in the log file.');
-        }
-        
-        setLogData(content);
-        setIsLoading(false);
-      } catch (error) {
-        console.error("Error parsing log file:", error);
-        setErrorMessage(`Error parsing log file: ${error.message}`);
-        setIsLoading(false);
-      }
-    }, 0);
-  };
-
-  // Update the visible rows based on scroll position
+  // Оновлюємо видимі рядки на основі позиції прокрутки
   const updateVisibleData = (scrollPosition, data = flightData, height = viewportHeight) => {
     if (!data.length) return;
     
@@ -125,112 +43,81 @@ const BlackboxLogViewer = () => {
     setVisibleFlightData(data.slice(startIndex, endIndex));
   };
 
-  // Handle scroll events
+  // Обробка подій прокрутки
   const handleScroll = (e) => {
     setScrollTop(e.target.scrollTop);
     updateVisibleData(e.target.scrollTop);
     
-    // Sync horizontal scroll
+    // Синхронізуємо горизонтальну прокрутку
     if (e.target === bodyRef.current && headerRef.current) {
       headerRef.current.scrollLeft = e.target.scrollLeft;
     }
   };
 
-  // Calculate total scroll height
+  // Розрахунок загальної висоти прокрутки
   const scrollHeight = flightData.length * rowHeight;
   
-  // Calculate start position for visible rows
+  // Розрахунок початкової позиції для видимих рядків
   const startOffset = Math.max(0, Math.floor(scrollTop / rowHeight) - bufferSize) * rowHeight;
 
-  // Toggle column selection
-  const toggleColumnSelection = (column) => {
-    if (selectedColumns.includes(column)) {
-      // Don't allow deselecting the first column (loop iteration)
-      if (column === dataHeaders[0]) return;
-      
-      setSelectedColumns(selectedColumns.filter(col => col !== column));
-    } else {
-      setSelectedColumns([...selectedColumns, column]);
-    }
-  };
-
-  // Get description for metadata parameters
+  // Отримання опису для параметрів метаданих
   const getMetadataDescription = (key) => {
     const descriptions = {
-      'Product': 'Name and creator of the blackbox recorder',
-      'firmwareType': 'Type of firmware used on the flight controller',
-      'firmware': 'Major and minor version of Betaflight firmware',
-      'firmwarePatch': 'Patch level of the Betaflight firmware',
-      'firmwareVersion': 'Complete version number of the firmware',
-      'Firmware revision': 'Full firmware identifier including build information',
-      'Firmware date': 'Date and time when the firmware was compiled',
-      'Board information': 'Model and manufacturer of the flight controller board',
-      'Log start datetime': 'When the log recording began',
-      'Craft name': 'Name assigned to the craft in Betaflight Configurator',
-      'minthrottle': 'Minimum throttle value (PWM signal)',
-      'maxthrottle': 'Maximum throttle value (PWM signal)',
-      'gyroScale': 'Scaling factor for gyroscope readings',
-      'motorOutput': 'Motor output range',
-      'acc_1G': 'Accelerometer reading that corresponds to 1G (gravity)',
-      'vbatscale': 'Scaling factor for battery voltage readings',
-      'vbatmincellvoltage': 'Minimum allowed cell voltage (in 0.01V)',
-      'vbatwarningcellvoltage': 'Warning threshold for cell voltage (in 0.01V)',
-      'vbatmaxcellvoltage': 'Maximum expected cell voltage (in 0.01V)',
-      'looptime': 'Duration of the main control loop in microseconds',
-      'gyro_sync_denom': 'Gyro sampling divider',
-      'pid_process_denom': 'PID calculation frequency divider',
-      'thrMid': 'Throttle mid-point for expo curve (percentage)',
-      'thrExpo': 'Throttle expo value - higher gives more sensitivity in middle range',
-      'tpa_rate': 'Throttle PID attenuation rate',
-      'tpa_breakpoint': 'Throttle value where TPA begins',
-      'rc_rates': 'RC rate settings for roll, pitch, yaw (affects stick sensitivity)',
-      'rc_expo': 'RC expo settings for roll, pitch, yaw (affects sensitivity around center)',
-      'rates': 'Rate settings that determine maximum rotation rate',
-      'rollPID': 'PID values for roll axis (P, I, D, Feed Forward, Transition)',
-      'pitchPID': 'PID values for pitch axis (P, I, D, Feed Forward, Transition)',
-      'yawPID': 'PID values for yaw axis (P, I, D, Feed Forward, Transition)',
-      'levelPID': 'PID values for self-leveling (angle mode)',
-      'anti_gravity_gain': 'Strength of anti-gravity feature (prevents I-term drop during quick throttle changes)',
-      'anti_gravity_cutoff_hz': 'Cutoff frequency for anti-gravity filter',
-      'deadband': 'RC deadband in microseconds (region around center with no response)',
-      'yaw_deadband': 'RC deadband specific to yaw axis',
-      'gyro_lowpass_hz': 'Cutoff frequency for gyro lowpass filter in Hz',
-      'dterm_lowpass_hz': 'Cutoff frequency for D-term lowpass filter in Hz',
-      'dyn_notch_count': 'Number of dynamic notch filters',
-      'dyn_notch_q': 'Q factor (width) of dynamic notch filters',
-      'dshot_bidir': 'Bidirectional DShot enabled (for RPM filtering)',
-      'motor_poles': 'Number of motor poles (for RPM filtering)',
-      'rpm_filter_fade_range_hz': 'Frequency range over which RPM filtering is phased out',
-      'features': 'Enabled Betaflight features (bitmask)',
-      'motor_pwm_rate': 'PWM frequency for motors',
-      'dyn_idle_min_rpm': 'Minimum RPM for dynamic idle feature',
-      'motor_output_limit': 'Maximum motor output as percentage'
+      'Product': 'Назва та виробник рекордера blackbox',
+      'firmwareType': 'Тип прошивки, яка використовується на польотному контролері',
+      'firmware': 'Мажорна і мінорна версія прошивки Betaflight',
+      'firmwarePatch': 'Рівень патчу прошивки Betaflight',
+      'firmwareVersion': 'Повний номер версії прошивки',
+      'Firmware revision': 'Повний ідентифікатор прошивки включно з інформацією про збірку',
+      'Firmware date': 'Дата та час компіляції прошивки',
+      'Board information': 'Модель та виробник плати польотного контролера',
+      'Log start datetime': 'Коли розпочався запис логу',
+      'Craft name': 'Ім\'я, присвоєне апарату в Betaflight Configurator',
+      'minthrottle': 'Мінімальне значення газу (PWM сигнал)',
+      'maxthrottle': 'Максимальне значення газу (PWM сигнал)',
+      'gyroScale': 'Коефіцієнт масштабування для показів гіроскопа',
+      'motorOutput': 'Діапазон вихідного сигналу мотора',
+      'acc_1G': 'Показання акселерометра, що відповідає 1G (гравітації)',
+      'vbatscale': 'Коефіцієнт масштабування для напруги батареї',
+      'vbatmincellvoltage': 'Мінімально допустима напруга комірки (у 0.01В)',
+      'vbatwarningcellvoltage': 'Поріг попередження для напруги комірки (у 0.01В)',
+      'vbatmaxcellvoltage': 'Максимальна очікувана напруга комірки (у 0.01В)',
+      'looptime': 'Тривалість основного контрольного циклу в мікросекундах',
+      'gyro_sync_denom': 'Дільник для частоти вибірки гіроскопа',
+      'pid_process_denom': 'Дільник для частоти розрахунку PID',
+      'thrMid': 'Середня точка газу для кривої expo (відсоток)',
+      'thrExpo': 'Значення expo газу - вище дає більшу чутливість у середньому діапазоні',
+      'tpa_rate': 'Швидкість послаблення PID від газу',
+      'tpa_breakpoint': 'Значення газу, де починається TPA',
+      'rc_rates': 'Налаштування RC rate для крену, тангажу, рискання (впливає на чутливість стіків)',
+      'rc_expo': 'Налаштування RC expo для крену, тангажу, рискання (впливає на чутливість біля центру)',
+      'rates': 'Налаштування швидкості, що визначають максимальну швидкість обертання',
+      'rollPID': 'Значення PID для осі крену (P, I, D, Feed Forward, Transition)',
+      'pitchPID': 'Значення PID для осі тангажу (P, I, D, Feed Forward, Transition)',
+      'yawPID': 'Значення PID для осі рискання (P, I, D, Feed Forward, Transition)',
+      'levelPID': 'Значення PID для самовирівнювання (angle mode)',
+      'anti_gravity_gain': 'Сила функції анти-гравітації (запобігає падінню I-терм під час швидких змін газу)',
+      'anti_gravity_cutoff_hz': 'Частота зрізу для фільтра анти-гравітації',
+      'deadband': 'Мертва зона RC в мікросекундах (область навколо центру без відповіді)',
+      'yaw_deadband': 'Мертва зона RC спеціально для осі рискання',
+      'gyro_lowpass_hz': 'Частота зрізу для низькочастотного фільтра гіроскопа в Гц',
+      'dterm_lowpass_hz': 'Частота зрізу для низькочастотного фільтра D-терму в Гц',
+      'dyn_notch_count': 'Кількість динамічних режекторних фільтрів',
+      'dyn_notch_q': 'Q-фактор (ширина) динамічних режекторних фільтрів',
+      'dshot_bidir': 'Увімкнено двонаправлений DShot (для RPM фільтрації)',
+      'motor_poles': 'Кількість полюсів мотора (для RPM фільтрації)',
+      'rpm_filter_fade_range_hz': 'Діапазон частот, у якому RPM фільтрація зменшується',
+      'features': 'Увімкнені функції Betaflight (бітова маска)',
+      'motor_pwm_rate': 'Частота PWM для моторів',
+      'dyn_idle_min_rpm': 'Мінімальні оберти для функції динамічного холостого ходу',
+      'motor_output_limit': 'Максимальний вихід мотора як відсоток'
     };
 
-    // Return the description if available, otherwise empty string
+    // Повертаємо опис, якщо він доступний, інакше порожній рядок
     return descriptions[key] || '';
   };
 
-  // Reset columns to default selection
-  const resetColumnSelection = () => {
-    // Always include first column
-    let newSelection = [dataHeaders[0]]; 
-    
-    // Add important columns if they exist
-    const importantColumns = ['time', 'gyroADC[0]', 'gyroADC[1]', 'gyroADC[2]', 'motor[0]', 'motor[1]', 'motor[2]', 'motor[3]'];
-    importantColumns.forEach(col => {
-      const colIndex = dataHeaders.findIndex(h => h.toLowerCase() === col.toLowerCase());
-      if (colIndex !== -1) {
-        newSelection.push(dataHeaders[colIndex]);
-      }
-    });
-    
-    // Limit to 10 total columns
-    newSelection = newSelection.slice(0, 10);
-    setSelectedColumns(newSelection);
-  };
-
-  // Effect to measure the viewport
+  // Ефект для вимірювання області перегляду
   useEffect(() => {
     if (bodyRef.current) {
       const resizeObserver = new ResizeObserver(entries => {
@@ -246,19 +133,24 @@ const BlackboxLogViewer = () => {
     }
   }, [bodyRef, flightData, scrollTop]);
 
+  // Ефект для оновлення видимих даних при зміні даних польоту
+  useEffect(() => {
+    if (flightData.length > 0) {
+      updateVisibleData(scrollTop);
+    }
+  }, [flightData]);
+
   const handleFileUpload = (event) => {
     const file = event.target.files[0];
     if (!file) return;
 
-    setIsLoading(true);
     const reader = new FileReader();
     reader.onload = (e) => {
       const content = e.target.result;
       parseBlackboxLog(content);
     };
     reader.onerror = () => {
-      setErrorMessage('Failed to read the file. Please try again.');
-      setIsLoading(false);
+      setErrorMessage('Не вдалося прочитати файл. Будь ласка, спробуйте ще раз.');
     };
     reader.readAsText(file);
   };
@@ -267,10 +159,10 @@ const BlackboxLogViewer = () => {
     <div className="container mx-auto p-4 bg-white shadow-md rounded-lg">
       <h1 className="text-2xl font-bold mb-4 text-gray-800">Betaflight Blackbox Log Viewer</h1>
       
-      {/* File upload section */}
+      {/* Секція завантаження файлу */}
       <div className="mb-6 bg-gray-50 p-4 rounded-md">
         <label className="block text-sm font-medium text-gray-700 mb-2">
-          Upload Betaflight Blackbox Log File
+          Завантажити файл логів Betaflight Blackbox
         </label>
         <input
           type="file"
@@ -285,7 +177,7 @@ const BlackboxLogViewer = () => {
         />
       </div>
 
-      {/* Error message */}
+      {/* Повідомлення про помилку */}
       {errorMessage && (
         <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-4">
           <div className="flex">
@@ -301,17 +193,17 @@ const BlackboxLogViewer = () => {
         </div>
       )}
 
-      {/* Loading indicator */}
+      {/* Індикатор завантаження */}
       {isLoading && (
         <div className="text-center py-4">
           <div className="inline-block h-8 w-8 animate-spin rounded-full border-4 border-solid border-blue-500 border-r-transparent align-[-0.125em] motion-reduce:animate-[spin_1.5s_linear_infinite]"></div>
-          <p className="mt-2 text-gray-600">Processing log data...</p>
+          <p className="mt-2 text-gray-600">Обробка даних логу...</p>
         </div>
       )}
 
       {logData && !isLoading && (
         <>
-          {/* Tab navigation */}
+          {/* Навігація по вкладках */}
           <div className="border-b border-gray-200 mb-4">
             <nav className="flex -mb-px">
               <button
@@ -322,7 +214,7 @@ const BlackboxLogViewer = () => {
                     : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
-                Metadata ({Object.keys(metadata).length})
+                Метадані ({Object.keys(metadata).length})
               </button>
               <button
                 onClick={() => setActiveTab('flightData')}
@@ -332,22 +224,22 @@ const BlackboxLogViewer = () => {
                     : 'text-gray-500 hover:text-gray-700'
                 }`}
               >
-                Flight Data ({flightData.length.toLocaleString()} rows)
+                Дані польоту ({flightData.length.toLocaleString()} рядків)
               </button>
             </nav>
           </div>
 
-          {/* Content based on active tab */}
+          {/* Контент на основі активної вкладки */}
           {activeTab === 'metadata' && (
             <div className="overflow-x-auto shadow rounded-lg border border-gray-200">
               <table className="min-w-full divide-y divide-gray-200">
                 <thead>
                   <tr>
                     <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Parameter
+                      Параметр
                     </th>
                     <th className="px-6 py-3 bg-gray-50 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Value
+                      Значення
                     </th>
                   </tr>
                 </thead>
@@ -367,7 +259,7 @@ const BlackboxLogViewer = () => {
 
           {activeTab === 'flightData' && dataHeaders.length > 0 && (
             <div className="shadow rounded-lg border border-gray-200">
-              {/* Column selector */}
+              {/* Селектор стовпців */}
               <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex flex-wrap items-center">
                 <div className="relative inline-block text-left mr-2 mb-2">
                   <button
@@ -375,7 +267,7 @@ const BlackboxLogViewer = () => {
                     className="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                     onClick={() => setColumnSelectOpen(!columnSelectOpen)}
                   >
-                    Select Columns
+                    Вибрати стовпці
                     <svg className="-mr-1 ml-2 h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                       <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
                     </svg>
@@ -386,12 +278,12 @@ const BlackboxLogViewer = () => {
                       <div className="py-1 divide-y divide-gray-200">
                         <div className="px-4 py-2">
                           <div className="flex justify-between">
-                            <span className="text-sm font-medium text-gray-700">Available Columns</span>
+                            <span className="text-sm font-medium text-gray-700">Доступні стовпці</span>
                             <button 
                               onClick={resetColumnSelection}
                               className="text-xs text-blue-600 hover:text-blue-800"
                             >
-                              Reset to Default
+                              Скинути до стандартних
                             </button>
                           </div>
                         </div>
@@ -404,7 +296,7 @@ const BlackboxLogViewer = () => {
                                 className="form-checkbox h-4 w-4 text-blue-600 transition duration-150 ease-in-out"
                                 checked={selectedColumns.includes(column)}
                                 onChange={() => toggleColumnSelection(column)}
-                                disabled={column === dataHeaders[0]} // First column cannot be deselected
+                                disabled={column === dataHeaders[0]} // Перший стовпець не можна деактивувати
                               />
                               <span className="ml-2 text-sm text-gray-700">{column}</span>
                             </label>
@@ -416,17 +308,17 @@ const BlackboxLogViewer = () => {
                 </div>
                 
                 <div className="text-sm text-gray-500">
-                  Showing {selectedColumns.length} of {dataHeaders.length} columns
+                  Показано {selectedColumns.length} з {dataHeaders.length} стовпців
                 </div>
                 
                 <div className="ml-auto text-sm text-gray-500">
-                  <span className="font-medium">{flightData.length.toLocaleString()}</span> rows
+                  <span className="font-medium">{flightData.length.toLocaleString()}</span> рядків
                 </div>
               </div>
               
-              {/* Table with virtual scrolling */}
+              {/* Таблиця з віртуальним скролінгом */}
               <div className="relative">
-                {/* Fixed table header */}
+                {/* Фіксований заголовок таблиці */}
                 <div 
                   ref={headerRef}
                   className="overflow-x-auto bg-gray-50 border-b border-gray-200"
@@ -448,17 +340,17 @@ const BlackboxLogViewer = () => {
                   </table>
                 </div>
                 
-                {/* Virtual scrolling table body */}
+                {/* Тіло таблиці з віртуальним скролінгом */}
                 <div 
                   ref={bodyRef}
                   onScroll={handleScroll}
                   className="overflow-auto"
                   style={{ height: '60vh', position: 'relative' }}
                 >
-                  {/* Spacer div to maintain correct scroll height */}
+                  {/* Div-проміжок для підтримки правильної висоти прокрутки */}
                   <div style={{ height: scrollHeight, width: '1px' }}></div>
                   
-                  {/* Actual visible rows with transform */}
+                  {/* Фактичні видимі рядки з трансформацією */}
                   <table 
                     className="min-w-full divide-y divide-gray-200"
                     style={{ 
@@ -490,7 +382,7 @@ const BlackboxLogViewer = () => {
               <div className="bg-gray-50 px-4 py-3 text-xs text-gray-500 border-t border-gray-200">
                 {flightData.length > 0 && (
                   <div>
-                    <span className="font-medium">{flightData.length.toLocaleString()}</span> rows of flight data
+                    <span className="font-medium">{flightData.length.toLocaleString()}</span> рядків даних польоту
                   </div>
                 )}
               </div>
