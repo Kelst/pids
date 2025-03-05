@@ -828,6 +828,12 @@ export class BlackboxAnalyzer {
  * @param {File} file - Завантажений файл
  * @returns {Promise<Object>} - Розібрані дані Blackbox
  */
+/**
+ * Доданий метод для розбору файлу Blackbox без моків
+ * @param {File} file - Завантажений файл
+ * @returns {Promise<Object>} - Розібрані дані Blackbox
+ * @throws {Error} - Кидає помилку, якщо не вдалося розпарсити файл
+ */
 static async parseFile(file) {
     console.log("Початок аналізу файлу:", file.name);
     
@@ -872,19 +878,10 @@ static async parseFile(file) {
       }
     } catch (error) {
       console.error("Помилка при розборі файлу:", error);
-      
-      // Створюємо демо-дані для тестування
-      return {
-        type: 'demo',
-        data: this.generateDemoData(100),
-        headers: {
-          'Product': 'Betaflight (Demo)',
-          'Firmware revision': 'Demo Mode',
-          'Craft name': 'Demo Drone'
-        }
-      };
+      // Замість створення моків, просто прокидаємо помилку нагору
+      throw new Error(`Не вдалося розпарсити файл: ${error.message}`);
     }
-  }
+}
   
   /**
    * Генерує демо-дані для тестування при відсутності файлу

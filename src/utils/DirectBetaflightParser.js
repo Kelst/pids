@@ -6,6 +6,7 @@ export class DirectBetaflightParser {
      * Розбирає лог Betaflight напряму без використання зовнішніх бібліотек
      * @param {string} content - Вміст файлу
      * @returns {Object} - Розібрані дані
+     * @throws {Error} - Кидає помилку якщо файл не вдалося розпарсити
      */
     static parseLog(content) {
       console.log("Пряме розбирання логу Betaflight...");
@@ -103,6 +104,11 @@ export class DirectBetaflightParser {
           throw new Error("Не знайдено дані після заголовка колонок");
         }
         
+        // Перевіряємо наявність обов'язкових полів
+        if (!this.hasRequiredFields(data[0])) {
+          throw new Error("У файлі відсутні обов'язкові поля даних (gyroX, gyroY, gyroZ або час)");
+        }
+        
         return {
           type: 'betaflight',
           headers: metadata,
@@ -112,6 +118,19 @@ export class DirectBetaflightParser {
         console.error("Помилка при розборі Betaflight логу:", err);
         throw new Error(`Помилка розбору Betaflight логу: ${err.message}`);
       }
+    }
+    
+    /**
+     * Перевіряє наявність обов'язкових полів у даних
+     * @param {Object} dataPoint - Точка даних
+     * @returns {boolean} - true якщо є всі обов'язкові поля
+     */
+    static hasRequiredFields(dataPoint) {
+      // Перевіряємо наявність хоча б деяких важливих полів
+      const hasGyroData = 'gyroX' in dataPoint || 'gyroY' in dataPoint || 'gyroZ' in dataPoint;
+      const hasTimeData = 'time' in dataPoint || 'loopIteration' in dataPoint;
+      
+      return hasGyroData && hasTimeData;
     }
     
     /**
