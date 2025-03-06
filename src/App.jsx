@@ -2,7 +2,8 @@ import React from 'react'
 import { useState } from 'react'
 import BlackboxLogViewer from './component/BlackboxLogViewer'
 import BlackboxSummary from './component/BlackboxSummary'
-import BlackboxAnalyzer from './component/BlackboxAnalyzer'  // Імпортуємо новий компонент
+import BlackboxAnalyzer from './component/BlackboxAnalyzer'
+import FlightVisualizer3D from './component/FlightVisualizer3D'  // Імпортуємо новий компонент
 
 function App() {
   const [activeSection, setActiveSection] = useState('viewer')
@@ -47,6 +48,16 @@ function App() {
           >
             Аналіз і рекомендації
           </button>
+          <button
+            onClick={() => setActiveSection('visualizer')}
+            className={`mr-8 py-4 px-1 ${
+              activeSection === 'visualizer'
+                ? 'border-b-2 border-blue-500 font-medium text-blue-600'
+                : 'text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+            3D Візуалізація
+          </button>
         </nav>
       </div>
       
@@ -54,6 +65,7 @@ function App() {
       {activeSection === 'viewer' && <BlackboxLogViewer />}
       {activeSection === 'summary' && <BlackboxSummary />}
       {activeSection === 'analyzer' && <BlackboxAnalyzer />}
+      {activeSection === 'visualizer' && <FlightVisualizer3D />}
     </div>
   )
 }
