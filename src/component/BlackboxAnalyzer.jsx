@@ -304,49 +304,46 @@ const BlackboxAnalyzer = () => {
 
     return { errorMetrics, pidContributions };
   };
+/**
+ * Рекомендує оптимальний D-термін на основі аналізу загасання
+ * замість простої залежності від перерегулювання
+ */
 
+  
   // Функція аналізу швидкості реакції системи з покращеним використанням даних
   const analyzeStepResponse = async () => {
-    // Шукаємо точки різкої зміни в командах
+    // Базова структура як у оригінальному методі
     const stepResponseMetrics = {
-      roll: { settlingTime: 0, overshoot: 0, riseTime: 0, delay: 0 },
-      pitch: { settlingTime: 0, overshoot: 0, riseTime: 0, delay: 0 },
-      yaw: { settlingTime: 0, overshoot: 0, riseTime: 0, delay: 0 }
+      roll: { settlingTime: 0, overshoot: 0, riseTime: 0, delay: 0, dampingRatio: 0, oscillationFreq: 0, decayRate: 0 },
+      pitch: { settlingTime: 0, overshoot: 0, riseTime: 0, delay: 0, dampingRatio: 0, oscillationFreq: 0, decayRate: 0 },
+      yaw: { settlingTime: 0, overshoot: 0, riseTime: 0, delay: 0, dampingRatio: 0, oscillationFreq: 0, decayRate: 0 }
     };
-
-    // Структура для збереження історії змін
+  
+    // Історія відповіді для візуалізації та аналізу
     const responseHistory = {
       roll: [],
       pitch: [],
       yaw: []
     };
-
+  
     // Розмір порції для обробки даних
     const chunkSize = 500;
     const sampleTimeUs = parseFloat(metadata.looptime) || 1000; // Час між семплами в мікросекундах
     const sampleTimeMs = sampleTimeUs / 1000; // Переводимо в мілісекунди
-
+  
     for (const axis of ['roll', 'pitch', 'yaw']) {
       const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
       
-      // Використовуємо функцію пошуку колонок з урахуванням різних назв
+      // Використовуємо функцію пошуку колонок
       const rcCommandCol = findColumnName(`rcCommand[${axisIndex}]`, dataHeaders);
       const setpointCol = findColumnName(`setpoint[${axisIndex}]`, dataHeaders);
       const gyroCol = findColumnName(`gyroADC[${axisIndex}]`, dataHeaders);
       const pTermCol = findColumnName(`axisP[${axisIndex}]`, dataHeaders);
+      const dTermCol = findColumnName(`axisD[${axisIndex}]`, dataHeaders);
       const errorCol = findColumnName(`axisError[${axisIndex}]`, dataHeaders);
       
       // Перевіряємо чи існують необхідні колонки
       const columnsExist = setpointCol && gyroCol && (rcCommandCol || errorCol);
-      
-      // Діагностичний лог
-      console.log(`Колонки для аналізу швидкості реакції осі ${axis}:`, {
-        rcCommand: rcCommandCol,
-        setpoint: setpointCol,
-        gyro: gyroCol,
-        pTerm: pTermCol,
-        error: errorCol
-      });
       
       if (columnsExist) {
         try {
@@ -356,14 +353,6 @@ const BlackboxAnalyzer = () => {
           
           // Буфер для відстеження попередніх значень
           let prevSetpoint = null;
-          let prevTime = null;
-          let prevGyro = null;
-          
-          // Створюємо масив для відстеження змін у часі
-          const timeHistory = [];
-          const setpointHistory = [];
-          const gyroHistory = [];
-          const pTermHistory = [];
           
           // Проходимо дані для виявлення різких змін
           await processInChunks(flightData, chunkSize, (chunk, chunkIndex, startIndex) => {
@@ -375,13 +364,6 @@ const BlackboxAnalyzer = () => {
               const currentTime = getNumericColumnValue(row, 'time', dataHeaders) || (globalIndex * sampleTimeMs * 1000);
               const currentSetpoint = getNumericColumnValue(row, setpointCol, dataHeaders);
               const currentGyro = getNumericColumnValue(row, gyroCol, dataHeaders);
-              const currentPTerm = pTermCol ? getNumericColumnValue(row, pTermCol, dataHeaders) : 0;
-              
-              // Зберігаємо історію для аналізу
-              timeHistory.push(currentTime);
-              setpointHistory.push(currentSetpoint);
-              gyroHistory.push(currentGyro);
-              pTermHistory.push(currentPTerm);
               
               // Якщо це не перший запис і є суттєва зміна у setpoint
               if (prevSetpoint !== null && Math.abs(currentSetpoint - prevSetpoint) > threshold) {
@@ -391,10 +373,10 @@ const BlackboxAnalyzer = () => {
                 const targetValue = currentSetpoint;
                 const startGyro = currentGyro;
                 
-                // Збираємо реакцію системи (до 100 точок після зміни)
+                // Збираємо реакцію системи (до 200 точок після зміни для кращого аналізу загасання)
                 const response = [];
                 
-                for (let j = 0; j < 100 && (globalIndex + j) < flightData.length; j++) {
+                for (let j = 0; j < 200 && (globalIndex + j) < flightData.length; j++) {
                   if (globalIndex + j >= flightData.length) break;
                   
                   // Якщо не вийшли за межі поточної порції
@@ -402,7 +384,12 @@ const BlackboxAnalyzer = () => {
                     const responseRow = chunk[i + j];
                     const time = getNumericColumnValue(responseRow, 'time', dataHeaders);
                     const gyroValue = getNumericColumnValue(responseRow, gyroCol, dataHeaders);
-                    response.push({ time: (time - startTime) / 1000, value: gyroValue }); // час в мс
+                    const dTerm = dTermCol ? getNumericColumnValue(responseRow, dTermCol, dataHeaders) : null;
+                    response.push({ 
+                      time: (time - startTime) / 1000, // час в мс
+                      value: gyroValue,
+                      dTerm
+                    });
                   } 
                   // Якщо вийшли за межі порції - збережемо позицію для подальшого аналізу
                   else {
@@ -419,7 +406,7 @@ const BlackboxAnalyzer = () => {
                 }
                 
                 // Якщо зібрали достатньо точок в межах порції, відзначаємо як завершений
-                if (response.length >= 20) {
+                if (response.length >= 50) {
                   stepChanges.push({ 
                     startIndex, 
                     targetValue, 
@@ -431,10 +418,8 @@ const BlackboxAnalyzer = () => {
                 }
               }
               
-              // Оновлюємо попередні значення
+              // Оновлюємо попереднє значення
               prevSetpoint = currentSetpoint;
-              prevTime = currentTime;
-              prevGyro = currentGyro;
             }
           });
           
@@ -464,17 +449,95 @@ const BlackboxAnalyzer = () => {
             const actualRange = targetValue - startGyro;
             
             if (Math.abs(actualRange) > 5) { // Переконуємося, що зміна суттєва
+              // ----- ПОКРАЩЕНИЙ АНАЛІЗ ЗАГАСАННЯ -----
+              
+              // Знаходимо піки і западини для аналізу загасання
+              const peaks = [];
+              const valleys = [];
+              
+              // Перші 5 мс пропускаємо для уникнення шуму в початковій фазі
+              let startAnalysisIdx = 0;
+              while (startAnalysisIdx < response.length && response[startAnalysisIdx].time < 5) {
+                startAnalysisIdx++;
+              }
+              
+              // Знаходимо піки і западини
+              for (let i = startAnalysisIdx + 1; i < response.length - 1; i++) {
+                const prev = response[i-1].value;
+                const curr = response[i].value;
+                const next = response[i+1].value;
+                
+                // Виявляємо локальні максимуми (піки)
+                if (curr > prev && curr > next) {
+                  peaks.push({
+                    index: i,
+                    time: response[i].time,
+                    value: curr
+                  });
+                }
+                
+                // Виявляємо локальні мінімуми (западини)
+                if (curr < prev && curr < next) {
+                  valleys.push({
+                    index: i,
+                    time: response[i].time,
+                    value: curr
+                  });
+                }
+              }
+              
+              // Обчислюємо логарифмічний декремент загасання, якщо є достатньо піків
+              let dampingRatio = 0;
+              let oscillationFreq = 0;
+              let decayRate = 0;
+              
+              if (peaks.length >= 2) {
+                // Обчислюємо співвідношення амплітуд послідовних піків
+                const amplitudeRatios = [];
+                for (let i = 0; i < peaks.length - 1; i++) {
+                  const currentPeakAmp = Math.abs(peaks[i].value - targetValue);
+                  const nextPeakAmp = Math.abs(peaks[i+1].value - targetValue);
+                  
+                  if (nextPeakAmp > 0) {
+                    amplitudeRatios.push(currentPeakAmp / nextPeakAmp);
+                  }
+                }
+                
+                // Обчислюємо середнє співвідношення амплітуд
+                if (amplitudeRatios.length > 0) {
+                  const avgAmplitudeRatio = amplitudeRatios.reduce((sum, ratio) => sum + ratio, 0) / amplitudeRatios.length;
+                  
+                  // Логарифмічний декремент загасання
+                  const logDecrement = Math.log(avgAmplitudeRatio);
+                  
+                  // Коефіцієнт загасання (damping ratio)
+                  dampingRatio = logDecrement / (2 * Math.PI * Math.sqrt(1 + (logDecrement / (2 * Math.PI)) ** 2));
+                  
+                  // Коефіцієнт спаду (швидкість загасання)
+                  decayRate = logDecrement * 100; // у відсотках на період
+                }
+                
+                // Обчислюємо частоту коливань
+                if (peaks.length >= 2) {
+                  const periods = [];
+                  for (let i = 0; i < peaks.length - 1; i++) {
+                    periods.push(peaks[i+1].time - peaks[i].time);
+                  }
+                  
+                  const avgPeriod = periods.reduce((sum, period) => sum + period, 0) / periods.length;
+                  oscillationFreq = avgPeriod > 0 ? 1000 / avgPeriod : 0; // Частота в Гц
+                }
+              }
+              
+              // Стандартні метрики step response
               // Значення стабілізації (95% від цільового)
               const settlingThreshold = 0.05 * Math.abs(actualRange);
               
-              // Знаходимо час стабілізації
+              // Час стабілізації
               let settlingTime = 0;
-              let stabilized = false;
-              
-              // Перевіряємо коли значення стабілізується (знаходиться в межах 5% від цільового тривалий час)
               for (let i = 0; i < response.length; i++) {
                 if (Math.abs(response[i].value - targetValue) <= settlingThreshold) {
-                  // Перевіряємо, чи воно залишається стабільним
+                  // Перевіряємо, чи значення залишається стабільним
                   let stable = true;
                   for (let j = i; j < Math.min(i + 10, response.length); j++) {
                     if (Math.abs(response[j].value - targetValue) > settlingThreshold) {
@@ -485,18 +548,12 @@ const BlackboxAnalyzer = () => {
                   
                   if (stable) {
                     settlingTime = response[i].time;
-                    stabilized = true;
                     break;
                   }
                 }
               }
               
-              // Якщо не знайдено момент стабілізації, використовуємо останню точку
-              if (!stabilized && response.length > 0) {
-                settlingTime = response[response.length - 1].time;
-              }
-              
-              // Знаходимо перерегулювання
+              // Перерегулювання
               let maxValue = startGyro;
               let maxIndex = 0;
               
@@ -507,11 +564,10 @@ const BlackboxAnalyzer = () => {
                 }
               }
               
-              // Розраховуємо перерегулювання відносно діапазону зміни
               const overshoot = actualRange !== 0 ? 
                 ((maxValue - targetValue) / actualRange) * 100 : 0;
               
-              // Знаходимо час наростання (від 10% до 90% цільового значення)
+              // Час наростання (10% - 90%)
               const riseStartThreshold = startGyro + 0.1 * actualRange;
               const riseEndThreshold = startGyro + 0.9 * actualRange;
               
@@ -521,7 +577,7 @@ const BlackboxAnalyzer = () => {
               let riseEndFound = false;
               
               for (let i = 0; i < response.length; i++) {
-                // Для позитивного діапазону зміни
+                // Для позитивного діапазону
                 if (actualRange > 0) {
                   if (!riseStartFound && response[i].value >= riseStartThreshold) {
                     riseStartTime = response[i].time;
@@ -533,7 +589,7 @@ const BlackboxAnalyzer = () => {
                     break;
                   }
                 } 
-                // Для негативного діапазону зміни
+                // Для негативного діапазону
                 else {
                   if (!riseStartFound && response[i].value <= riseStartThreshold) {
                     riseStartTime = response[i].time;
@@ -548,17 +604,22 @@ const BlackboxAnalyzer = () => {
               }
               
               const riseTime = riseEndFound && riseStartFound ? 
-                riseEndTime - riseStartTime : 
-                settlingTime * 0.6; // Приблизна оцінка, якщо точні моменти не знайдено
+                riseEndTime - riseStartTime : settlingTime * 0.6;
               
-              // Знаходимо затримку від зміни setpoint до початку реакції (10% зміни)
+              // Затримка
               const delay = riseStartFound ? riseStartTime : 0;
               
+              // Оновлюємо метрики з додатковою інформацією про загасання
               stepResponseMetrics[axis] = {
                 settlingTime,
                 overshoot,
                 riseTime,
-                delay
+                delay,
+                dampingRatio,
+                oscillationFreq,
+                decayRate,
+                peaks,
+                valleys
               };
             }
           }
@@ -567,9 +628,75 @@ const BlackboxAnalyzer = () => {
         }
       }
     }
-
+  
     return { stepResponseMetrics, responseHistory };
   };
+  
+  /**
+   * Рекомендує оптимальний D-термін на основі аналізу загасання
+   * замість простої залежності від перерегулювання
+   */
+  const recommendDTerm = (axis, currentDTerm, stepResponse) => {
+    // Якщо немає даних аналізу, повертаємо поточне значення
+    if (!stepResponse) return currentDTerm;
+    
+    const { overshoot, dampingRatio, oscillationFreq, decayRate } = stepResponse;
+    
+    // Оптимальний коефіцієнт загасання для квадрокоптера - близько 0.6-0.7
+    // (компроміс між швидкістю відгуку та стабільністю)
+    const optimalDampingRatio = 0.65;
+    
+    // Фактори коригування D-терміну
+    let dCorrection = 1.0; // За замовчуванням без змін
+    
+    // 1. Корекція на основі коефіцієнта загасання
+    if (dampingRatio > 0) {
+      if (dampingRatio < optimalDampingRatio - 0.15) {
+        // Недостатнє згасання: збільшуємо D
+        dCorrection *= 1.15 + (0.05 * ((optimalDampingRatio - dampingRatio) / 0.15));
+      } else if (dampingRatio > optimalDampingRatio + 0.15) {
+        // Надмірне загасання: зменшуємо D
+        dCorrection *= 0.9 - (0.05 * ((dampingRatio - optimalDampingRatio) / 0.15));
+      }
+    }
+    
+    // 2. Корекція на основі швидкості спаду амплітуди
+    if (decayRate > 0) {
+      const optimalDecayRate = 50; // Ідеальне значення швидкості спаду (%)
+      
+      if (decayRate < optimalDecayRate * 0.7) {
+        // Занадто повільне загасання: збільшуємо D
+        dCorrection *= 1.1;
+      } else if (decayRate > optimalDecayRate * 1.5) {
+        // Занадто швидке загасання: зменшуємо D
+        dCorrection *= 0.95;
+      }
+    }
+    
+    // 3. Корекція на основі перерегулювання (з меншою вагою)
+    if (overshoot > 25) {
+      dCorrection *= 1.05;
+    } else if (overshoot < 5) {
+      dCorrection *= 0.95;
+    }
+    
+    // 4. Корекція на основі частоти коливань
+    if (oscillationFreq > 0) {
+      if (oscillationFreq > 30) {
+        // Високочастотні коливання можуть потребувати нижчого D
+        dCorrection *= 0.95;
+      }
+    }
+    
+    // Обмеження максимальної зміни D для уникнення різких перепадів
+    dCorrection = Math.max(0.8, Math.min(dCorrection, 1.3));
+    
+    // Застосовуємо корекцію з округленням
+    const newDTerm = Math.round(currentDTerm * dCorrection);
+    
+    return newDTerm;
+  };
+  
 
   // Функція аналізу частотної характеристики (FFT) з покращеним використанням даних
   const analyzeFrequencyCharacteristics = async () => {
@@ -810,262 +937,282 @@ const BlackboxAnalyzer = () => {
     const harmonicAnalysis = {
       roll: { thd: 0, stabilityScore: 0, oscillationDetected: false, pidHarmonics: {} },
       pitch: { thd: 0, stabilityScore: 0, oscillationDetected: false, pidHarmonics: {} },
-      yaw: { thd: 0, stabilityScore: 0, oscillationDetected: false, pidHarmonics: {} }
+      yaw: { thd: 0, stabilityScore: 0, oscillationDetected: false, pidHarmonics: {} },
+      // Додаємо секцію для аналізу взаємодії між осями
+      axisInteractions: {
+        roll_pitch: { correlation: 0, phaseRelation: 0, couplingStrength: 0 },
+        roll_yaw: { correlation: 0, phaseRelation: 0, couplingStrength: 0 },
+        pitch_yaw: { correlation: 0, phaseRelation: 0, couplingStrength: 0 }
+      },
+      // Спільні гармоніки - коли одна й та сама частота з'являється на кількох осях
+      commonHarmonics: []
     };
-
-    // Орієнтовна частота запису даних (в Гц)
-    const looptimeUs = parseFloat(metadata.looptime) || 312; // мікросекунди
-    const sampleRate = Math.round(1000000 / looptimeUs); // Гц
-
-    // Для кожної осі
+  
+    // Орієнтовна частота запису даних
+    const looptimeUs = parseFloat(metadata.looptime) || 312;
+    const sampleRate = Math.round(1000000 / looptimeUs);
+  
+    // Збираємо дані гіроскопа для всіх осей
+    const gyroData = {
+      roll: [],
+      pitch: [],
+      yaw: []
+    };
+    
+    // Розмір FFT для гармонічного аналізу
+    const fftSize = 1024;
+    const chunkSize = 2000;
+    const collectSize = Math.min(flightData.length, fftSize * 2);
+    
+    // Збираємо дані по всіх осях
     for (const axis of ['roll', 'pitch', 'yaw']) {
       const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
-      
-      // Отримуємо всі релевантні колонки даних з використанням нових функцій
       const gyroCol = findColumnName(`gyroADC[${axisIndex}]`, dataHeaders);
-      const pTermCol = findColumnName(`axisP[${axisIndex}]`, dataHeaders);
-      const iTermCol = findColumnName(`axisI[${axisIndex}]`, dataHeaders);
-      const dTermCol = findColumnName(`axisD[${axisIndex}]`, dataHeaders);
-      const sumCol = findColumnName(`axisSum[${axisIndex}]`, dataHeaders);
       
-      // Діагностичний лог
-      console.log(`Колонки для аналізу гармонійності осі ${axis}:`, {
-        gyro: gyroCol,
-        pTerm: pTermCol,
-        iTerm: iTermCol,
-        dTerm: dTermCol,
-        sum: sumCol
-      });
+      if (gyroCol) {
+        const axisData = [];
+        
+        await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
+          for (const row of chunk) {
+            const value = getNumericColumnValue(row, gyroCol, dataHeaders);
+            axisData.push(value);
+            if (axisData.length >= fftSize) break;
+          }
+        });
+        
+        gyroData[axis] = axisData.slice(0, fftSize);
+      }
+    }
+    
+    // Аналіз гармонік для кожної осі окремо (базовий аналіз)
+    const axisSpectrums = {};
+    const axisDominantFreqs = {};
+    
+    for (const axis of ['roll', 'pitch', 'yaw']) {
+      if (gyroData[axis].length > 0) {
+        // Вікно Ханна для зменшення витоку спектру
+        const windowedData = applyHannWindow(gyroData[axis]);
+        
+        // Проводимо FFT аналіз
+        const { spectrum, dominantFrequencies } = performFFTAnalysis(
+          windowedData, sampleRate, fftSize
+        );
+        
+        axisSpectrums[axis] = spectrum;
+        axisDominantFreqs[axis] = dominantFrequencies;
+        
+        // Базовий THD аналіз, як у оригінальній функції
+        const { thd, stabilityScore, oscillationDetected } = calculateTHD(spectrum, dominantFrequencies);
+        
+        harmonicAnalysis[axis] = {
+          thd,
+          stabilityScore,
+          oscillationDetected,
+          dominantFrequencies
+        };
+      }
+    }
+    
+    // ----- АНАЛІЗ ВЗАЄМОДІЇ МІЖ ОСЯМИ -----
+    
+    // 1. Крос-кореляційний аналіз між осями у часовому домені
+    const axesPairs = [
+      ['roll', 'pitch'],
+      ['roll', 'yaw'],
+      ['pitch', 'yaw']
+    ];
+    
+    for (const [axis1, axis2] of axesPairs) {
+      const key = `${axis1}_${axis2}`;
       
-      // Перевіряємо наявність колонок
-      const hasGyro = gyroCol !== null;
-      const hasPID = pTermCol !== null && iTermCol !== null && dTermCol !== null;
-      const hasSum = sumCol !== null;
+      if (gyroData[axis1].length > 0 && gyroData[axis2].length > 0) {
+        // Обчислюємо нормалізовану крос-кореляцію
+        const correlation = calculateNormalizedCrossCorrelation(
+          gyroData[axis1], gyroData[axis2]
+        );
+        
+        // Обчислюємо фазові відносини між осями
+        const phaseRelation = calculatePhaseRelation(
+          axisSpectrums[axis1], axisSpectrums[axis2], axisDominantFreqs[axis1], axisDominantFreqs[axis2]
+        );
+        
+        // Оцінюємо силу зв'язку між осями (механічне з'єднання)
+        const couplingStrength = calculateCouplingStrength(
+          axisDominantFreqs[axis1], axisDominantFreqs[axis2], correlation, phaseRelation
+        );
+        
+        harmonicAnalysis.axisInteractions[key] = {
+          correlation,
+          phaseRelation,
+          couplingStrength
+        };
+      }
+    }
+    
+    // 2. Знаходимо спільні гармоніки, які проявляються на кількох осях
+    const commonFreqs = findCommonFrequencies(
+      axisDominantFreqs.roll, 
+      axisDominantFreqs.pitch, 
+      axisDominantFreqs.yaw
+    );
+    
+    harmonicAnalysis.commonHarmonics = commonFreqs;
+    
+    // 3. Аналіз поширення коливань між осями
+    if (commonFreqs.length > 0) {
+      const propagationAnalysis = analyzeOscillationPropagation(
+        gyroData, commonFreqs, sampleRate
+      );
       
-      if (hasGyro) {
-        try {
-          // Для FFT потрібна довжина, що є степенем 2
-          const fftSize = 1024;
+      harmonicAnalysis.oscillationPropagation = propagationAnalysis;
+    }
+    
+    return { harmonicAnalysis };
+  };
+  
+  /**
+   * Застосовує вікно Ханна до даних
+   */
+  const applyHannWindow = (data) => {
+    const windowedData = new Array(data.length);
+    for (let i = 0; i < data.length; i++) {
+      // Вікно Ханна: 0.5 * (1 - cos(2π*n/(N-1)))
+      const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (data.length - 1)));
+      windowedData[i] = data[i] * window;
+    }
+    return windowedData;
+  };
+  
+  /**
+   * Виконує FFT аналіз та знаходить домінантні частоти
+   */
+  const performFFTAnalysis = (windowedData, sampleRate, fftSize) => {
+    // Налаштовуємо FFT
+    const fft = new FFT(fftSize);
+    const out = new Array(fftSize * 2);
+    
+    // Копіюємо дані до комплексного масиву
+    const complexData = new Array(fftSize * 2).fill(0);
+    for (let i = 0; i < fftSize; i++) {
+      complexData[i * 2] = windowedData[i]; // Real part
+      complexData[i * 2 + 1] = 0;           // Imaginary part
+    }
+    
+    // Запускаємо FFT
+    fft.transform(out, complexData);
+    
+    // Обчислюємо спектр
+    const spectrum = [];
+    for (let i = 0; i < fftSize / 2; i++) {
+      const real = out[i * 2];
+      const imag = out[i * 2 + 1];
+      const frequency = i * (sampleRate / fftSize);
+      const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2);
+      const phase = Math.atan2(imag, real);
+      
+      spectrum.push({ frequency, magnitude, phase });
+    }
+    
+    // Знаходимо домінуючі частоти (локальні максимуми)
+    const dominantFrequencies = [];
+    for (let i = 1; i < spectrum.length - 1; i++) {
+      if (spectrum[i].magnitude > spectrum[i-1].magnitude && 
+          spectrum[i].magnitude > spectrum[i+1].magnitude &&
+          spectrum[i].magnitude > 0.01) {
+        dominantFrequencies.push({
+          frequency: spectrum[i].frequency,
+          magnitude: spectrum[i].magnitude,
+          phase: spectrum[i].phase
+        });
+      }
+    }
+    
+    // Сортуємо за магнітудою і беремо топ-10
+    dominantFrequencies.sort((a, b) => b.magnitude - a.magnitude);
+    
+    return {
+      spectrum,
+      dominantFrequencies: dominantFrequencies.slice(0, 10)
+    };
+  };
+  
+  /**
+   * Обчислює нормалізовану крос-кореляцію між двома сигналами
+   */
+  const calculateNormalizedCrossCorrelation = (signal1, signal2) => {
+    // Нормалізуємо сигнали
+    const mean1 = signal1.reduce((sum, val) => sum + val, 0) / signal1.length;
+    const mean2 = signal2.reduce((sum, val) => sum + val, 0) / signal2.length;
+    
+    const normalized1 = signal1.map(val => val - mean1);
+    const normalized2 = signal2.map(val => val - mean2);
+    
+    // Обчислюємо стандартні відхилення
+    const std1 = Math.sqrt(normalized1.reduce((sum, val) => sum + val * val, 0) / normalized1.length);
+    const std2 = Math.sqrt(normalized2.reduce((sum, val) => sum + val * val, 0) / normalized2.length);
+    
+    // Крос-кореляція при нульовому зсуві
+    let correlation = 0;
+    for (let i = 0; i < normalized1.length; i++) {
+      correlation += (normalized1[i] / std1) * (normalized2[i] / std2);
+    }
+    
+    correlation /= normalized1.length;
+    
+    return correlation;
+  };
+  
+  /**
+   * Обчислює фазові відносини між домінантними частотами двох осей
+   */
+  const calculatePhaseRelation = (spectrum1, spectrum2, dominantFreqs1, dominantFreqs2) => {
+    // Шукаємо спільні частоти між осями
+    const commonFreqs = [];
+    
+    for (const freq1 of dominantFreqs1) {
+      for (const freq2 of dominantFreqs2) {
+        // Якщо частоти досить близькі (в межах 5%)
+        if (Math.abs(freq1.frequency - freq2.frequency) / freq1.frequency < 0.05) {
+          // Обчислюємо фазову різницю
+          let phaseDiff = freq1.phase - freq2.phase;
           
-          // Масиви для збору даних
-          const gyroData = new Array(fftSize).fill(0);
-          const pData = hasPID ? new Array(fftSize).fill(0) : null;
-          const iData = hasPID ? new Array(fftSize).fill(0) : null;
-          const dData = hasPID ? new Array(fftSize).fill(0) : null;
-          const sumData = hasSum ? new Array(fftSize).fill(0) : null;
+          // Нормалізуємо до діапазону [-π, π]
+          while (phaseDiff > Math.PI) phaseDiff -= 2 * Math.PI;
+          while (phaseDiff < -Math.PI) phaseDiff += 2 * Math.PI;
           
-          // Збираємо дані порційно
-          let dataCollected = 0;
-          const chunkSize = 2000;
-          
-          // Розмір даних для збору 
-          const collectSize = Math.min(flightData.length, fftSize * 2);
-          
-          // Обробляємо дані порціями і збираємо значення для FFT
-          await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
-            for (const row of chunk) {
-              if (dataCollected < fftSize) {
-                const gyroValue = getNumericColumnValue(row, gyroCol, dataHeaders);
-                
-                if (!isNaN(gyroValue)) {
-                  gyroData[dataCollected] = gyroValue;
-                  
-                  // Якщо доступні PID-дані, збираємо і їх
-                  if (hasPID) {
-                    pData[dataCollected] = getNumericColumnValue(row, pTermCol, dataHeaders);
-                    iData[dataCollected] = getNumericColumnValue(row, iTermCol, dataHeaders);
-                    dData[dataCollected] = getNumericColumnValue(row, dTermCol, dataHeaders);
-                  }
-                  
-                  // Якщо доступні дані про суму PID-компонентів
-                  if (hasSum) {
-                    sumData[dataCollected] = getNumericColumnValue(row, sumCol, dataHeaders);
-                  }
-                  
-                  dataCollected++;
-                }
-              }
-            }
+          commonFreqs.push({
+            frequency: (freq1.frequency + freq2.frequency) / 2,
+            phaseDiff,
+            magnitude1: freq1.magnitude,
+            magnitude2: freq2.magnitude
           });
-          
-          // Застосовуємо вікно Ханна для зменшення витоку спектру
-          const windowedGyroData = new Array(fftSize);
-          for (let i = 0; i < fftSize; i++) {
-            const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
-            windowedGyroData[i] = gyroData[i] * window;
-          }
-          
-          // Налаштовуємо FFT
-          const fft = new FFT(fftSize);
-          const out = new Array(fftSize * 2);
-          
-          // Підготовка комплексних даних
-          const complexData = new Array(fftSize * 2).fill(0);
-          for (let i = 0; i < fftSize; i++) {
-            complexData[i * 2] = windowedGyroData[i]; // Real part
-            complexData[i * 2 + 1] = 0;               // Imaginary part
-          }
-          
-          // Запускаємо FFT
-          fft.transform(out, complexData);
-          
-          // Обчислюємо спектр (амплітуда) - попередньо виділяємо пам'ять
-          const spectrum = new Array(Math.floor(fftSize / 2));
-          for (let i = 0; i < fftSize / 2; i++) {
-            const real = out[i * 2];
-            const imag = out[i * 2 + 1];
-            const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2);
-            spectrum[i] = magnitude;
-          }
-          
-          // Знаходимо фундаментальну частоту (найбільша амплітуда)
-          let fundamentalIndex = 0;
-          let fundamentalMagnitude = 0;
-          
-          // Пошук максимуму без використання Math.max(...array)
-          for (let i = 1; i < spectrum.length; i++) { // починаємо з 1, щоб уникнути DC-складової
-            if (spectrum[i] > fundamentalMagnitude) {
-              fundamentalMagnitude = spectrum[i];
-              fundamentalIndex = i;
-            }
-          }
-          
-          // Якщо знайдено фундаментальну частоту
-          if (fundamentalIndex > 0 && fundamentalMagnitude > 0) {
-            const fundamentalFreq = fundamentalIndex * (sampleRate / fftSize);
-            
-            // Розраховуємо THD (Total Harmonic Distortion)
-            let harmonicPower = 0;
-            const harmonics = [];
-            
-            for (let i = 2; i * fundamentalIndex < spectrum.length; i++) {
-              const harmonicIndex = i * fundamentalIndex;
-              const harmonicMagnitude = spectrum[harmonicIndex];
-              harmonicPower += harmonicMagnitude * harmonicMagnitude;
-              
-              harmonics.push({
-                harmonic: i,
-                frequency: harmonicIndex * (sampleRate / fftSize),
-                magnitude: harmonicMagnitude,
-                relativeMagnitude: harmonicMagnitude / fundamentalMagnitude
-              });
-            }
-            
-            // Запобігання діленню на нуль
-            const thd = fundamentalMagnitude > 0 
-              ? (Math.sqrt(harmonicPower) / fundamentalMagnitude * 100) 
-              : 0;
-            
-            // Оцінка стабільності (вища THD означає меншу стабільність)
-            const stabilityScore = 100 - Math.min(100, thd);
-            
-            // Виявлення небажаних коливань
-            const oscillationThreshold = 30; // Поріг для виявлення коливань
-            const oscillationDetected = thd > oscillationThreshold;
-            
-            // Результат аналізу для даної осі
-            harmonicAnalysis[axis] = {
-              thd,
-              stabilityScore,
-              oscillationDetected,
-              fundamentalFrequency: fundamentalFreq,
-              fundamentalMagnitude,
-              harmonics: harmonics.slice(0, 5), // Берем до 5 гармонік
-              pidHarmonics: {}
-            };
-            
-            // Аналіз гармонійності для PID-компонентів
-            if (hasPID) {
-              const pidComponents = [
-                { name: 'P', data: pData },
-                { name: 'I', data: iData },
-                { name: 'D', data: dData }
-              ];
-              
-              for (const component of pidComponents) {
-                if (component.data) {
-                  try {
-                    // Застосовуємо вікно Ханна
-                    const windowedData = new Array(fftSize);
-                    for (let i = 0; i < fftSize; i++) {
-                      const window = 0.5 * (1 - Math.cos(2 * Math.PI * i / (fftSize - 1)));
-                      windowedData[i] = component.data[i] * window;
-                    }
-                    
-                    // Підготовка для FFT
-                    const pidFft = new FFT(fftSize);
-                    const pidOut = new Array(fftSize * 2);
-                    const pidComplexData = new Array(fftSize * 2).fill(0);
-                    
-                    for (let i = 0; i < fftSize; i++) {
-                      pidComplexData[i * 2] = windowedData[i]; // Real part
-                      pidComplexData[i * 2 + 1] = 0;          // Imaginary part
-                    }
-                    
-                    // Запускаємо FFT
-                    pidFft.transform(pidOut, pidComplexData);
-                    
-                    // Обчислюємо спектр
-                    const pidSpectrum = new Array(Math.floor(fftSize / 2));
-                    for (let i = 0; i < fftSize / 2; i++) {
-                      const real = pidOut[i * 2];
-                      const imag = pidOut[i * 2 + 1];
-                      const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2);
-                      pidSpectrum[i] = magnitude;
-                    }
-                    
-                    // Перевіряємо амплітуду на фундаментальній частоті та її гармоніках
-                    const fundamentalMagnitude = pidSpectrum[fundamentalIndex];
-                    let harmonicPower = 0;
-                    
-                    for (let i = 2; i * fundamentalIndex < pidSpectrum.length; i++) {
-                      const harmonicIndex = i * fundamentalIndex;
-                      harmonicPower += pidSpectrum[harmonicIndex] * pidSpectrum[harmonicIndex];
-                    }
-                    
-                    // Знаходимо THD для компонента
-                    const componentThd = fundamentalMagnitude > 0 
-                      ? (Math.sqrt(harmonicPower) / fundamentalMagnitude * 100) 
-                      : 0;
-                    
-                    harmonicAnalysis[axis].pidHarmonics[component.name] = {
-                      thd: componentThd,
-                      fundamentalMagnitude
-                    };
-                  } catch (err) {
-                    console.error(`Помилка аналізу ${component.name}-компонента для осі ${axis}:`, err);
-                  }
-                }
-              }
-            }
-          } else {
-            // Якщо фундаментальна частота не знайдена
-            harmonicAnalysis[axis] = {
-              thd: 0,
-              stabilityScore: 100, // Припускаємо високу стабільність за відсутності сигналу
-              oscillationDetected: false,
-              pidHarmonics: {}
-            };
-          }
-          
-        } catch (err) {
-          console.error(`Помилка аналізу гармонік для осі ${axis}:`, err);
-          // Встановлюємо значення за замовчуванням при помилці
-          harmonicAnalysis[axis] = {
-            thd: 0,
-            stabilityScore: 0,
-            oscillationDetected: false,
-            pidHarmonics: {}
-          };
         }
       }
     }
-
-    return { harmonicAnalysis };
+    
+    // Обчислюємо зважену середню фазову різницю
+    if (commonFreqs.length > 0) {
+      let totalWeight = 0;
+      let weightedPhaseDiff = 0;
+      
+      for (const freq of commonFreqs) {
+        // Вага залежить від амплітуди обох сигналів
+        const weight = freq.magnitude1 * freq.magnitude2;
+        weightedPhaseDiff += freq.phaseDiff * weight;
+        totalWeight += weight;
+      }
+      
+      return totalWeight > 0 ? weightedPhaseDiff / totalWeight : 0;
+    }
+    
+    return 0; // Немає спільних частот
   };
-
+  
   // Функція аналізу фільтрів з покращеним використанням даних
-  const analyzeFilters = async () => {
+  /**
+ * Покращений аналіз фільтрів з адаптивними Q-факторами для notch-фільтрів
+ */
+const analyzeFilters = async () => {
     const filterAnalysis = {
       gyroFilters: {
         effectiveness: 0,
@@ -1079,7 +1226,9 @@ const BlackboxAnalyzer = () => {
       },
       notchFilters: {
         effectiveness: 0,
-        identifiedNoiseFrequencies: []
+        identifiedNoiseFrequencies: [],
+        classifiedNoises: [], // Додаємо класифіковані шуми
+        recommendedQFactors: {} // Додаємо рекомендовані Q-фактори
       },
       rpmFilters: {
         effectiveness: 0,
@@ -1087,7 +1236,7 @@ const BlackboxAnalyzer = () => {
         detectedHarmonics: []
       }
     };
-
+  
     // Отримуємо налаштування фільтрів з метаданих
     const gyroLowpassHz = parseFloat(metadata['gyro_lowpass_hz']) || 0;
     const dtermLowpassHz = parseFloat(metadata['dterm_lowpass_hz']) || 0;
@@ -1108,7 +1257,7 @@ const BlackboxAnalyzer = () => {
     
     try {
       // Аналіз даних гіроскопа
-      // Перевіряємо наявність як фільтрованих, так і нефільтрованих даних з використанням нових функцій
+      // Перевіряємо наявність як фільтрованих, так і нефільтрованих даних
       const hasUnfilteredGyro = ['roll', 'pitch', 'yaw'].some(axis => {
         const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
         return findColumnName(`gyroUnfilt[${axisIndex}]`, dataHeaders) !== null;
@@ -1389,6 +1538,15 @@ const BlackboxAnalyzer = () => {
                   fft.transform(out, complexData);
                   
                   // Обчислюємо спектр та шукаємо піки шуму в діапазоні notch фільтра
+                  const freqSpectrum = [];
+                  for (let i = 0; i < fftSize / 2; i++) {
+                    const freq = i * (sampleRate / fftSize);
+                    const real = out[i * 2];
+                    const imag = out[i * 2 + 1];
+                    const magnitude = Math.sqrt(real * real + imag * imag) / (fftSize/2);
+                    freqSpectrum.push({ frequency: freq, magnitude });
+                  }
+                  
                   for (let i = 1; i < fftSize / 2 - 1; i++) {
                     const freq = i * (sampleRate / fftSize);
                     
@@ -1412,11 +1570,15 @@ const BlackboxAnalyzer = () => {
                         const existingFreq = identifiedNoiseFrequencies.find(f => Math.abs(f.frequency - freq) < 5);
                         
                         if (!existingFreq) {
-                          identifiedNoiseFrequencies.push({
+                          // Додаємо цей пік шуму до списку
+                          const noiseData = {
                             frequency: freq,
                             magnitude,
-                            axis
-                          });
+                            axis,
+                            freqSpectrum // Додаємо весь спектр для аналізу ширини шуму
+                          };
+                          
+                          identifiedNoiseFrequencies.push(noiseData);
                         }
                       }
                     }
@@ -1537,10 +1699,78 @@ const BlackboxAnalyzer = () => {
             }
           }
           
+          // Класифікуємо шуми на основі їх характеристик
+          const classifiedNoises = identifiedNoiseFrequencies.map(noise => {
+            try {
+              // Ширина шуму - знаходимо напівширину на висоті 70.7% від максимуму (-3dB)
+              const noiseWidth = determineNoiseWidth(noise);
+              
+              // Стабільність частоти - оцінюємо наскільки стабільна частота у часі
+              const frequencyStability = determineFrequencyStability(noise, filterAnalysis.rpmFilters);
+              
+              // Клас шуму та рекомендований Q-фактор
+              let noiseClass;
+              let recommendedQ;
+              
+              if (noiseWidth < 5 && frequencyStability > 0.8) {
+                // Вузькосмуговий стабільний шум (типово від моторів)
+                noiseClass = 'narrowband_stable';
+                recommendedQ = 500; // Високий Q-фактор для вузького notch
+              } else if (noiseWidth < 10 && frequencyStability > 0.6) {
+                // Середній стабільний шум
+                noiseClass = 'mediumband_stable';
+                recommendedQ = 300; // Середній Q-фактор
+              } else if (noiseWidth > 20 || frequencyStability < 0.4) {
+                // Широкосмуговий або нестабільний шум
+                noiseClass = 'wideband_or_unstable';
+                recommendedQ = 120; // Низький Q-фактор для широкого notch
+              } else {
+                // Стандартний варіант
+                noiseClass = 'standard';
+                recommendedQ = 250;
+              }
+              
+              return {
+                ...noise,
+                noiseWidth,
+                frequencyStability,
+                noiseClass,
+                recommendedQ
+              };
+            } catch (error) {
+              console.error("Помилка класифікації шуму:", error);
+              return {
+                ...noise,
+                noiseWidth: 10,
+                frequencyStability: 0.5,
+                noiseClass: 'standard',
+                recommendedQ: 250
+              };
+            }
+          });
+          
+          // Оновлюємо аналіз з класифікованими шумами
           filterAnalysis.notchFilters = {
             effectiveness: notchEffectiveness,
-            identifiedNoiseFrequencies: identifiedNoiseFrequencies.slice(0, 5) // Беремо топ-5
+            identifiedNoiseFrequencies: identifiedNoiseFrequencies.slice(0, 5),
+            classifiedNoises: classifiedNoises
           };
+          
+          // Обчислюємо середній рекомендований Q-фактор
+          if (classifiedNoises.length > 0) {
+            const avgRecommendedQ = classifiedNoises.reduce((sum, noise) => sum + noise.recommendedQ, 0) / 
+                                  classifiedNoises.length;
+            
+            filterAnalysis.notchFilters.recommendedQFactors = {
+              average: Math.round(avgRecommendedQ),
+              perNoiseType: {
+                narrowband_stable: 500,
+                mediumband_stable: 300,
+                standard: 250,
+                wideband_or_unstable: 120
+              }
+            };
+          }
         }
         
         // Аналіз D-term фільтрів
@@ -1686,6 +1916,84 @@ const BlackboxAnalyzer = () => {
     
     return { filterAnalysis };
   };
+  
+  /**
+   * Визначає ширину шуму за спектром частот
+   */
+  const determineNoiseWidth = (noise) => {
+    // Пошук спектральної ширини шуму на рівні -3dB (70.7% від максимуму)
+    const peakMagnitude = noise.magnitude;
+    const thresholdMagnitude = peakMagnitude * 0.707;
+    const freqSpectrum = noise.freqSpectrum || [];
+    
+    // Якщо спектр не доступний, повертаємо значення за замовчуванням
+    if (!freqSpectrum.length) return 10;
+    
+    // Знаходимо індекс частоти шуму у спектрі
+    const peakIdx = freqSpectrum.findIndex(point => Math.abs(point.frequency - noise.frequency) < 1);
+    
+    if (peakIdx === -1) return 10; // За замовчуванням, якщо пік не знайдено
+    
+    // Пошук лівої границі
+    let leftIdx = -1;
+    for (let i = peakIdx - 1; i >= 0; i--) {
+      if (freqSpectrum[i].magnitude < thresholdMagnitude) {
+        leftIdx = i;
+        break;
+      }
+    }
+    
+    // Пошук правої границі
+    let rightIdx = -1;
+    for (let i = peakIdx + 1; i < freqSpectrum.length; i++) {
+      if (freqSpectrum[i].magnitude < thresholdMagnitude) {
+        rightIdx = i;
+        break;
+      }
+    }
+    
+    // Обчислюємо ширину в Гц
+    if (leftIdx !== -1 && rightIdx !== -1) {
+      return freqSpectrum[rightIdx].frequency - freqSpectrum[leftIdx].frequency;
+    } else {
+      // Якщо не знайдено границі, використовуємо емпіричну оцінку
+      return 10; // Середнє значення за замовчуванням
+    }
+  };
+  
+  /**
+   * Оцінює стабільність частоти шуму в часі
+   */
+  const determineFrequencyStability = (noise, rpmFilters) => {
+    // Оцінка стабільності частоти залежить від зміни частоти у часі
+    // Для RPM-залежних шумів стабільність буде нижчою
+    
+    // Якщо частота близька до гармонік RPM
+    const isRpmRelated = rpmFilters && rpmFilters.detectedHarmonics 
+      ? rpmFilters.detectedHarmonics.some(h => Math.abs(h.frequency - noise.frequency) < 5)
+      : false;
+    
+    if (isRpmRelated) {
+      // RPM-залежні шуми мають нижчу стабільність, особливо при маневрах
+      return 0.4; // Нижча стабільність для RPM-залежних шумів
+    }
+    
+    // Перевіряємо близькість до механічних резонансів рами
+    // (зазвичай 80-150 Гц для більшості рам)
+    if (noise.frequency > 80 && noise.frequency < 150) {
+      // Резонанси рами відносно стабільні
+      return 0.7;
+    }
+    
+    // Вищі частоти часто більш стабільні (можуть бути від статичних джерел шуму)
+    if (noise.frequency > 200) {
+      return 0.8;
+    }
+    
+    // За замовчуванням - середня стабільність
+    return 0.6;
+  };
+  
 
   // Допоміжні функції для аналізу
 
@@ -1895,23 +2203,25 @@ for (const freq of motorFrequencies) {
         dyn_notch_count: 0,
         dyn_notch_q: 0,
         dyn_notch_min_hz: 0,
-        dyn_notch_max_hz: 0
+        dyn_notch_max_hz: 0,
+        // Додаємо можливість різних Q-факторів
+        dynamic_notch_q_factors: []
       },
-      betaflightCommands: []
+      betaflightCommands: [],
+      // Додаємо детальні пояснення для рекомендацій
+      explanations: {
+        pid: {},
+        filters: {},
+        interactions: {}
+      }
     };
     
     try {
       // Отримуємо поточні налаштування PID з метаданих
       const currentPid = {
-        roll: {
-          p: 0, i: 0, d: 0, f: 0
-        },
-        pitch: {
-          p: 0, i: 0, d: 0, f: 0
-        },
-        yaw: {
-          p: 0, i: 0, d: 0, f: 0
-        }
+        roll: { p: 0, i: 0, d: 0, f: 0 },
+        pitch: { p: 0, i: 0, d: 0, f: 0 },
+        yaw: { p: 0, i: 0, d: 0, f: 0 }
       };
       
       // Парсимо поточні PID з метаданих
@@ -1961,7 +2271,7 @@ for (const freq of motorFrequencies) {
         dyn_notch_max_hz: parseInt(metadata.dyn_notch_max_hz) || 0
       };
       
-      // 1. Аналіз відхилень і рекомендації для PID
+      // 1. Базовий аналіз відхилень і рекомендації для PID
       if (analysisResults.errorMetrics) {
         for (const axis of ['roll', 'pitch', 'yaw']) {
           if (analysisResults.errorMetrics[axis]) {
@@ -1979,6 +2289,11 @@ for (const freq of motorFrequencies) {
               recommendations.pid[axis].p = currentPid[axis].p;
             }
             
+            // Додаємо пояснення
+            recommendations.explanations.pid[`${axis}_p`] = 
+              `P термін ${recommendations.pid[axis].p > currentPid[axis].p ? 'збільшено' : 'зменшено'} на основі ` +
+              `RMS-відхилення (${rmsError.toFixed(2)}).`;
+            
             // Рекомендації для I-терму
             if (meanError > 10) {
               // Якщо середнє відхилення велике, збільшуємо I
@@ -1988,39 +2303,104 @@ for (const freq of motorFrequencies) {
               recommendations.pid[axis].i = currentPid[axis].i;
             }
             
-            // Рекомендації для D-терму на основі максимального відхилення
-            recommendations.pid[axis].d = currentPid[axis].d;
+            // Додаємо пояснення
+            if (meanError > 10) {
+              recommendations.explanations.pid[`${axis}_i`] = 
+                `I термін збільшено через високе середнє відхилення (${meanError.toFixed(2)}).`;
+            }
+            
+            // Рекомендації для F-терміну
             recommendations.pid[axis].f = currentPid[axis].f;
           }
         }
       }
       
-      // 2. Аналіз швидкості реакції і додаткові корекції PID
+      // 2. Рекомендації для D-терміну на основі аналізу загасання
       if (analysisResults.stepResponseMetrics) {
         for (const axis of ['roll', 'pitch', 'yaw']) {
           if (analysisResults.stepResponseMetrics[axis]) {
-            const {settlingTime, overshoot, riseTime} = analysisResults.stepResponseMetrics[axis];
+            const stepResponse = analysisResults.stepResponseMetrics[axis];
+            const { overshoot, settlingTime, riseTime, dampingRatio, oscillationFreq, decayRate } = stepResponse;
             
-            // Корекція P на основі часу наростання
-            if (riseTime > 200) {
-              // Якщо реакція повільна, збільшуємо P
-              recommendations.pid[axis].p = Math.round(recommendations.pid[axis].p * 1.1);
+            // Оптимальний коефіцієнт загасання для квадрокоптера - близько 0.6-0.7
+            const optimalDampingRatio = 0.65;
+            
+            // Фактори коригування D-терміну
+            let dCorrection = 1.0; // За замовчуванням без змін
+            
+            // 1. Корекція на основі коефіцієнта загасання
+            if (dampingRatio > 0) {
+              if (dampingRatio < optimalDampingRatio - 0.15) {
+                // Недостатнє згасання: збільшуємо D
+                dCorrection *= 1.15 + (0.05 * ((optimalDampingRatio - dampingRatio) / 0.15));
+                
+                recommendations.explanations.pid[`${axis}_d_damping`] = 
+                  `D термін збільшено через недостатнє демпфування (${dampingRatio.toFixed(2)}).`;
+              } else if (dampingRatio > optimalDampingRatio + 0.15) {
+                // Надмірне загасання: зменшуємо D
+                dCorrection *= 0.9 - (0.05 * ((dampingRatio - optimalDampingRatio) / 0.15));
+                
+                recommendations.explanations.pid[`${axis}_d_damping`] = 
+                  `D термін зменшено через надмірне демпфування (${dampingRatio.toFixed(2)}).`;
+              }
             }
             
-            // Корекція D на основі перерегулювання
-            if (overshoot > 15) {
-              // Якщо перерегулювання велике, збільшуємо D
-              recommendations.pid[axis].d = Math.round(currentPid[axis].d * 1.15);
-            } else if (overshoot < 5 && settlingTime > 150) {
-              // Якщо малий overshoot але довгий час встановлення, зменшуємо D
-              recommendations.pid[axis].d = Math.round(currentPid[axis].d * 0.9);
+            // 2. Корекція на основі швидкості спаду амплітуди
+            if (decayRate > 0) {
+              const optimalDecayRate = 50; // Ідеальне значення швидкості спаду (%)
+              
+              if (decayRate < optimalDecayRate * 0.7) {
+                // Занадто повільне загасання: збільшуємо D
+                dCorrection *= 1.1;
+                
+                recommendations.explanations.pid[`${axis}_d_decay`] = 
+                  `D термін збільшено через повільне загасання коливань (${decayRate.toFixed(1)}%/період).`;
+              } else if (decayRate > optimalDecayRate * 1.5) {
+                // Занадто швидке загасання: зменшуємо D
+                dCorrection *= 0.95;
+                
+                recommendations.explanations.pid[`${axis}_d_decay`] = 
+                  `D термін зменшено через занадто швидке загасання (${decayRate.toFixed(1)}%/період).`;
+              }
             }
             
-            // Корекція Feed Forward на основі часу наростання
-            if (riseTime > 150 && currentPid[axis].f > 0) {
-              // Збільшуємо Feed Forward для швидшої реакції
-              recommendations.pid[axis].f = Math.round(currentPid[axis].f * 1.2);
+            // 3. Корекція на основі перерегулювання (з меншою вагою)
+            if (overshoot > 25) {
+              dCorrection *= 1.05;
+              
+              recommendations.explanations.pid[`${axis}_d_overshoot`] = 
+                `D термін збільшено через високе перерегулювання (${overshoot.toFixed(1)}%).`;
+            } else if (overshoot < 5) {
+              dCorrection *= 0.95;
+              
+              recommendations.explanations.pid[`${axis}_d_overshoot`] = 
+                `D термін зменшено через низьке перерегулювання (${overshoot.toFixed(1)}%).`;
             }
+            
+            // 4. Корекція на основі частоти коливань
+            if (oscillationFreq > 0) {
+              if (oscillationFreq > 30) {
+                // Високочастотні коливання можуть потребувати нижчого D
+                dCorrection *= 0.95;
+                
+                recommendations.explanations.pid[`${axis}_d_freq`] = 
+                  `D термін зменшено через високочастотні коливання (${oscillationFreq.toFixed(1)} Гц).`;
+              }
+            }
+            
+            // Обмеження максимальної зміни D для уникнення різких перепадів
+            dCorrection = Math.max(0.8, Math.min(dCorrection, 1.3));
+            
+            // Застосовуємо корекцію з округленням
+            recommendations.pid[axis].d = Math.round(currentPid[axis].d * dCorrection);
+            
+            // Загальне пояснення
+            recommendations.explanations.pid[`${axis}_d_summary`] = 
+              `D термін ${recommendations.pid[axis].d > currentPid[axis].d ? 'збільшено' : 'зменшено'} до ${recommendations.pid[axis].d} ` +
+              `(було ${currentPid[axis].d}) на основі аналізу загасання коливань: ` +
+              `демпфування=${dampingRatio ? dampingRatio.toFixed(2) : 'н/д'}, ` +
+              `швидкість загасання=${decayRate ? decayRate.toFixed(1) : 'н/д'}%/період, ` +
+              `частота=${oscillationFreq ? oscillationFreq.toFixed(1) : 'н/д'} Гц`;
           }
         }
       }
@@ -2034,14 +2414,114 @@ for (const freq of motorFrequencies) {
             // Корекція при виявленні небажаних коливань
             if (oscillationDetected) {
               // Зменшуємо P і D при наявності коливань
-              recommendations.pid[axis].p = Math.round(recommendations.pid[axis].p * 0.92);
-              recommendations.pid[axis].d = Math.round(recommendations.pid[axis].d * 0.92);
+              const currentP = recommendations.pid[axis].p;
+              const currentD = recommendations.pid[axis].d;
+              
+              recommendations.pid[axis].p = Math.round(currentP * 0.92);
+              recommendations.pid[axis].d = Math.round(currentD * 0.92);
+              
+              recommendations.explanations.pid[`${axis}_oscillation`] = 
+                `P і D терміни зменшено через виявлені небажані коливання (THD=${thd.toFixed(1)}%).`;
             }
             
             // Додаткова корекція на основі THD
             if (thd > 40) {
               // Високий THD вказує на нелінійність, зменшуємо P
-              recommendations.pid[axis].p = Math.round(recommendations.pid[axis].p * 0.95);
+              const currentP = recommendations.pid[axis].p;
+              recommendations.pid[axis].p = Math.round(currentP * 0.95);
+              
+              recommendations.explanations.pid[`${axis}_thd`] = 
+                `P термін зменшено через високі гармонічні спотворення (THD=${thd.toFixed(1)}%).`;
+            }
+          }
+        }
+        
+        // Аналіз взаємодії між осями
+        if (analysisResults.harmonicAnalysis.axisInteractions) {
+          const interactions = analysisResults.harmonicAnalysis.axisInteractions;
+          
+          // Знаходимо сильні зв'язки між осями
+          const strongCouplings = [];
+          for (const [axes, data] of Object.entries(interactions)) {
+            if (data.couplingStrength > 0.6) {
+              strongCouplings.push({
+                axes: axes.split('_'),
+                strength: data.couplingStrength,
+                correlation: data.correlation,
+                phaseRelation: data.phaseRelation
+              });
+            }
+          }
+          
+          // Аналізуємо поширення коливань
+          if (analysisResults.harmonicAnalysis.oscillationPropagation) {
+            const propagation = analysisResults.harmonicAnalysis.oscillationPropagation;
+            
+            // Знаходимо основні джерела коливань
+            const mainSources = {};
+            
+            for (const prop of propagation) {
+              if (prop.sourceAxis) {
+                mainSources[prop.sourceAxis] = (mainSources[prop.sourceAxis] || 0) + 1;
+              }
+            }
+            
+            // Формуємо рекомендації на основі джерел коливань
+            const sourcesEntries = Object.entries(mainSources);
+            if (sourcesEntries.length > 0) {
+              // Сортуємо за кількістю випадків, коли вісь є джерелом
+              sourcesEntries.sort((a, b) => b[1] - a[1]);
+              const primarySource = sourcesEntries[0][0];
+              
+              // Додаємо пояснення щодо основного джерела коливань
+              recommendations.explanations.interactions.primary_source = 
+                `Основне джерело коливань: ${primarySource}. ` +
+                `Рекомендується зосередити увагу на налаштуванні PID для цієї осі.`;
+              
+              // Коригуємо PID для первинного джерела коливань
+              if (recommendations.pid[primarySource]) {
+                // Обережно зменшуємо P і D для зменшення поширення коливань
+                const currentP = recommendations.pid[primarySource].p;
+                const currentD = recommendations.pid[primarySource].d;
+                
+                recommendations.pid[primarySource].p = Math.round(currentP * 0.95);
+                recommendations.pid[primarySource].d = Math.round(currentD * 0.97);
+                
+                recommendations.explanations.interactions[`${primarySource}_source_correction`] = 
+                  `Зменшено P і D для осі ${primarySource}, оскільки вона є основним джерелом коливань.`;
+              }
+            }
+          }
+          
+          // Формуємо рекомендації на основі сильних зв'язків
+          if (strongCouplings.length > 0) {
+            recommendations.explanations.interactions.strong_couplings = 
+              `Виявлено сильні зв'язки між осями: ` +
+              strongCouplings.map(c => 
+                `${c.axes[0]}-${c.axes[1]} (сила: ${(c.strength * 100).toFixed(0)}%)`
+              ).join(', ');
+            
+            // Якщо є сильний зв'язок між roll і pitch, коригуємо налаштування
+            const rollPitchCoupling = strongCouplings.find(
+              c => (c.axes.includes('roll') && c.axes.includes('pitch'))
+            );
+            
+            if (rollPitchCoupling && rollPitchCoupling.strength > 0.7) {
+              // Підлаштовуємо параметри обох осей для кращої збалансованості
+              recommendations.explanations.interactions.roll_pitch = 
+                `Сильний зв'язок між roll і pitch (${(rollPitchCoupling.strength * 100).toFixed(0)}%). ` +
+                `Рекомендується збалансування PID для цих осей.`;
+              
+              // Збалансовуємо D-термін між осями для зменшення спільних коливань
+              const avgD = Math.round(
+                (recommendations.pid.roll.d + recommendations.pid.pitch.d) / 2
+              );
+              
+              recommendations.pid.roll.d = avgD;
+              recommendations.pid.pitch.d = avgD;
+              
+              recommendations.explanations.interactions.roll_pitch_d_balance = 
+                `D терміни для roll і pitch збалансовані до ${avgD} для зменшення взаємних коливань.`;
             }
           }
         }
@@ -2056,6 +2536,10 @@ for (const freq of motorFrequencies) {
           // Рекомендуємо нову частоту фільтра гіроскопа
           if (recommendedFrequency > 0) {
             recommendations.filters.gyro_lowpass_hz = recommendedFrequency;
+            
+            recommendations.explanations.filters.gyro_lowpass = 
+              `Частота фільтра гіроскопа рекомендована ${recommendedFrequency} Гц ` +
+              `(було ${currentFilters.gyro_lowpass_hz} Гц).`;
           } else {
             recommendations.filters.gyro_lowpass_hz = currentFilters.gyro_lowpass_hz;
           }
@@ -2068,14 +2552,19 @@ for (const freq of motorFrequencies) {
           // Рекомендуємо нову частоту фільтра D-term
           if (recommendedFrequency > 0) {
             recommendations.filters.dterm_lowpass_hz = recommendedFrequency;
+            
+            recommendations.explanations.filters.dterm_lowpass = 
+              `Частота D-term фільтра рекомендована ${recommendedFrequency} Гц ` +
+              `(було ${currentFilters.dterm_lowpass_hz} Гц).`;
           } else {
             recommendations.filters.dterm_lowpass_hz = currentFilters.dterm_lowpass_hz;
           }
         }
         
-        // Notch фільтри
+        // Notch фільтри з адаптивним Q-фактором
         if (analysisResults.filterAnalysis.notchFilters) {
-          const {identifiedNoiseFrequencies} = analysisResults.filterAnalysis.notchFilters;
+          const { identifiedNoiseFrequencies, classifiedNoises, recommendedQFactors } = 
+            analysisResults.filterAnalysis.notchFilters;
           
           if (identifiedNoiseFrequencies.length > 0) {
             // Знаходимо мінімальну і максимальну частоти шуму
@@ -2094,10 +2583,44 @@ for (const freq of motorFrequencies) {
             // Рекомендуємо кількість notch фільтрів в залежності від виявлених шумів
             recommendations.filters.dyn_notch_count = Math.min(5, Math.max(3, identifiedNoiseFrequencies.length));
             
-            // Q-фактор notch фільтрів
-            recommendations.filters.dyn_notch_q = 350; // Стандартне значення
+            // Рекомендуємо адаптивні Q-фактори, якщо класифікація доступна
+            if (classifiedNoises && classifiedNoises.length > 0) {
+              // Вибираємо топ-N шумів для фільтрації
+              const topNoises = classifiedNoises
+                .sort((a, b) => b.magnitude - a.magnitude)
+                .slice(0, recommendations.filters.dyn_notch_count);
+              
+              // Формуємо масив рекомендованих Q-факторів для кожного шуму
+              recommendations.filters.dynamic_notch_q_factors = topNoises.map(noise => ({
+                frequency: noise.frequency,
+                q_factor: noise.recommendedQ,
+                noise_class: noise.noiseClass
+              }));
+              
+              // Усереднений Q-фактор для сумісності
+              recommendations.filters.dyn_notch_q = recommendedQFactors
+                ? recommendedQFactors.average
+                : 250;
+              
+              // Додаємо пояснення для адаптивних Q-факторів
+              recommendations.explanations.filters.notch_q_factors = 
+                `Адаптивні Q-фактори для різних типів шуму: ` +
+                topNoises.map(noise => 
+                  `${noise.frequency.toFixed(1)} Гц: Q=${noise.recommendedQ} (${noise.noiseClass})`
+                ).join(', ');
+            } else {
+              // Стандартний Q-фактор
+              recommendations.filters.dyn_notch_q = 250;
+            }
+            
+            // Додаємо загальне пояснення для notch фільтрів
+            recommendations.explanations.filters.notch = 
+              `Notch фільтри: кількість=${recommendations.filters.dyn_notch_count}, ` +
+              `діапазон=${recommendations.filters.dyn_notch_min_hz}-${recommendations.filters.dyn_notch_max_hz} Гц, ` +
+              `середній Q=${recommendations.filters.dyn_notch_q}.`;
+            
           } else {
-            // Використовуємо поточні налаштування
+            // Використовуємо поточні налаштування, якщо шуми не виявлені
             recommendations.filters.dyn_notch_min_hz = currentFilters.dyn_notch_min_hz;
             recommendations.filters.dyn_notch_max_hz = currentFilters.dyn_notch_max_hz;
             recommendations.filters.dyn_notch_count = currentFilters.dyn_notch_count;
@@ -2142,12 +2665,23 @@ for (const freq of motorFrequencies) {
       commands.push(`set dyn_notch_min_hz = ${recommendations.filters.dyn_notch_min_hz}`);
       commands.push(`set dyn_notch_max_hz = ${recommendations.filters.dyn_notch_max_hz}`);
       
+      // Додаткові команди для Betaflight 4.3+ з підтримкою різних Q-факторів
+      if (recommendations.filters.dynamic_notch_q_factors && 
+          recommendations.filters.dynamic_notch_q_factors.length > 0) {
+        commands.push('# Додаткові команди для Betaflight 4.3+ (індивідуальні Q-фактори)');
+        for (let i = 0; i < Math.min(recommendations.filters.dyn_notch_count, 
+                                  recommendations.filters.dynamic_notch_q_factors.length); i++) {
+          const qFactor = recommendations.filters.dynamic_notch_q_factors[i];
+          commands.push(`set dyn_notch_q_${i+1} = ${qFactor.q_factor} # Для частоти ~${qFactor.frequency.toFixed(1)} Гц`);
+        }
+      }
+      
       // Зберегти налаштування
       commands.push('save');
       
       recommendations.betaflightCommands = commands;
     } catch (err) {
-      console.error("Помилка генерації рекомендацій:", err);
+      console.error("Помилка генерації покращених рекомендацій:", err);
     }
     
     return recommendations;
