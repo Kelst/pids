@@ -20,11 +20,21 @@ const processInChunks = async (data, chunkSize, processFunc) => {
     }
     
     return results;
-  };import React, { useState, useEffect } from 'react';
+  };
+
+import React, { useState, useEffect } from 'react';
 import useBlackboxStore from '../store/blackboxStore';
 import * as FFT from 'fft.js';
 import * as math from 'mathjs';
 import _ from 'lodash';
+
+// Імпортуємо нову утиліту для пошуку колонок
+import { 
+  findColumnName, 
+  getNumericColumnValue, 
+  getAxisValues, 
+  getAxisColumns 
+} from '../utils/blackboxColumnMapper';
 
 const BlackboxAnalyzer = () => {
   // Отримуємо дані зі стора
@@ -119,39 +129,42 @@ const BlackboxAnalyzer = () => {
 
   // Функція аналізу відхилень для кожної осі з покращеним використанням даних
   const analyzeErrorMetrics = async () => {
-    // Шукаємо потрібні колонки в даних
+    // Шукаємо потрібні колонки в даних з використанням нової утиліти
     const axisColumns = {
       roll: {
-        setpoint: dataHeaders.find(h => h === 'setpoint[0]'),
-        actual: dataHeaders.find(h => h === 'gyroADC[0]'),
-        error: dataHeaders.find(h => h === 'axisError[0]'),
-        p: dataHeaders.find(h => h === 'axisP[0]'),
-        i: dataHeaders.find(h => h === 'axisI[0]'),
-        d: dataHeaders.find(h => h === 'axisD[0]'),
-        f: dataHeaders.find(h => h === 'axisF[0]'),
-        sum: dataHeaders.find(h => h === 'axisSum[0]')
+        setpoint: findColumnName('setpoint[0]', dataHeaders),
+        actual: findColumnName('gyroADC[0]', dataHeaders),
+        error: findColumnName('axisError[0]', dataHeaders),
+        p: findColumnName('axisP[0]', dataHeaders),
+        i: findColumnName('axisI[0]', dataHeaders),
+        d: findColumnName('axisD[0]', dataHeaders),
+        f: findColumnName('axisF[0]', dataHeaders),
+        sum: findColumnName('axisSum[0]', dataHeaders)
       },
       pitch: {
-        setpoint: dataHeaders.find(h => h === 'setpoint[1]'),
-        actual: dataHeaders.find(h => h === 'gyroADC[1]'),
-        error: dataHeaders.find(h => h === 'axisError[1]'),
-        p: dataHeaders.find(h => h === 'axisP[1]'),
-        i: dataHeaders.find(h => h === 'axisI[1]'),
-        d: dataHeaders.find(h => h === 'axisD[1]'),
-        f: dataHeaders.find(h => h === 'axisF[1]'),
-        sum: dataHeaders.find(h => h === 'axisSum[1]')
+        setpoint: findColumnName('setpoint[1]', dataHeaders),
+        actual: findColumnName('gyroADC[1]', dataHeaders),
+        error: findColumnName('axisError[1]', dataHeaders),
+        p: findColumnName('axisP[1]', dataHeaders),
+        i: findColumnName('axisI[1]', dataHeaders),
+        d: findColumnName('axisD[1]', dataHeaders),
+        f: findColumnName('axisF[1]', dataHeaders),
+        sum: findColumnName('axisSum[1]', dataHeaders)
       },
       yaw: {
-        setpoint: dataHeaders.find(h => h === 'setpoint[2]'),
-        actual: dataHeaders.find(h => h === 'gyroADC[2]'),
-        error: dataHeaders.find(h => h === 'axisError[2]'),
-        p: dataHeaders.find(h => h === 'axisP[2]'),
-        i: dataHeaders.find(h => h === 'axisI[2]'),
-        d: dataHeaders.find(h => h === 'axisD[2]'),
-        f: dataHeaders.find(h => h === 'axisF[2]'),
-        sum: dataHeaders.find(h => h === 'axisSum[2]')
+        setpoint: findColumnName('setpoint[2]', dataHeaders),
+        actual: findColumnName('gyroADC[2]', dataHeaders),
+        error: findColumnName('axisError[2]', dataHeaders),
+        p: findColumnName('axisP[2]', dataHeaders),
+        i: findColumnName('axisI[2]', dataHeaders),
+        d: findColumnName('axisD[2]', dataHeaders),
+        f: findColumnName('axisF[2]', dataHeaders),
+        sum: findColumnName('axisSum[2]', dataHeaders)
       }
     };
+
+    // Діагностичний лог для перевірки знайдених колонок
+    console.log("Знайдені колонки для аналізу відхилень:", axisColumns);
 
     // Розраховуємо середньоквадратичне відхилення та інші метрики
     const errorMetrics = {};
@@ -177,7 +190,7 @@ const BlackboxAnalyzer = () => {
           let sumTotal = 0;
           
           // Використовуємо пряме значення axisError, якщо воно доступно
-          const useDirectError = columns.error && dataHeaders.includes(columns.error);
+          const useDirectError = columns.error && columns.error in dataHeaders;
           
           // Обробляємо дані порціями
           await processInChunks(flightData, chunkSize, (chunk) => {
@@ -185,12 +198,12 @@ const BlackboxAnalyzer = () => {
               let error;
               
               if (useDirectError) {
-                // Використовуємо безпосередньо значення axisError з логу
-                error = parseFloat(row[columns.error]) || 0;
+                // Використовуємо getNumericColumnValue замість безпосереднього доступу
+                error = getNumericColumnValue(row, `axisError[${axis === 'roll' ? 0 : axis === 'pitch' ? 1 : 2}]`, dataHeaders);
               } else {
                 // Обчислюємо похибку як різницю між setpoint і actual
-                const setpoint = parseFloat(row[columns.setpoint]) || 0;
-                const actual = parseFloat(row[columns.actual]) || 0;
+                const setpoint = getNumericColumnValue(row, columns.setpoint, dataHeaders);
+                const actual = getNumericColumnValue(row, columns.actual, dataHeaders);
                 error = setpoint - actual;
               }
               
@@ -204,11 +217,11 @@ const BlackboxAnalyzer = () => {
               
               // Збираємо інформацію про PID компоненти, якщо вони доступні
               if (columns.p && columns.i && columns.d) {
-                const p = parseFloat(row[columns.p]) || 0;
-                const i = parseFloat(row[columns.i]) || 0;
-                const d = parseFloat(row[columns.d]) || 0;
-                const f = parseFloat(row[columns.f]) || 0;
-                const sum = parseFloat(row[columns.sum]) || (p + i + d + f);
+                const p = getNumericColumnValue(row, columns.p, dataHeaders);
+                const i = getNumericColumnValue(row, columns.i, dataHeaders);
+                const d = getNumericColumnValue(row, columns.d, dataHeaders);
+                const f = columns.f ? getNumericColumnValue(row, columns.f, dataHeaders) : 0;
+                const sum = columns.sum ? getNumericColumnValue(row, columns.sum, dataHeaders) : (p + i + d + f);
                 
                 if (!isNaN(p) && !isNaN(i) && !isNaN(d)) {
                   sumP += Math.abs(p);
@@ -316,16 +329,24 @@ const BlackboxAnalyzer = () => {
     for (const axis of ['roll', 'pitch', 'yaw']) {
       const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
       
-      // Використовуємо дані як з RC команд, так і setpoint - вони можуть відрізнятися через фільтрацію
-      const rcCommandCol = `rcCommand[${axisIndex}]`;
-      const setpointCol = `setpoint[${axisIndex}]`;
-      const gyroCol = `gyroADC[${axisIndex}]`;
-      const pTermCol = `axisP[${axisIndex}]`;
-      const errorCol = `axisError[${axisIndex}]`;
+      // Використовуємо функцію пошуку колонок з урахуванням різних назв
+      const rcCommandCol = findColumnName(`rcCommand[${axisIndex}]`, dataHeaders);
+      const setpointCol = findColumnName(`setpoint[${axisIndex}]`, dataHeaders);
+      const gyroCol = findColumnName(`gyroADC[${axisIndex}]`, dataHeaders);
+      const pTermCol = findColumnName(`axisP[${axisIndex}]`, dataHeaders);
+      const errorCol = findColumnName(`axisError[${axisIndex}]`, dataHeaders);
       
-      const columnsExist = dataHeaders.includes(setpointCol) && 
-                          dataHeaders.includes(gyroCol) && 
-                          (dataHeaders.includes(rcCommandCol) || dataHeaders.includes(errorCol));
+      // Перевіряємо чи існують необхідні колонки
+      const columnsExist = setpointCol && gyroCol && (rcCommandCol || errorCol);
+      
+      // Діагностичний лог
+      console.log(`Колонки для аналізу швидкості реакції осі ${axis}:`, {
+        rcCommand: rcCommandCol,
+        setpoint: setpointCol,
+        gyro: gyroCol,
+        pTerm: pTermCol,
+        error: errorCol
+      });
       
       if (columnsExist) {
         try {
@@ -350,10 +371,11 @@ const BlackboxAnalyzer = () => {
               const row = chunk[i];
               const globalIndex = startIndex + i;
               
-              const currentTime = parseFloat(row.time) || (globalIndex * sampleTimeMs * 1000); // в мікросекундах
-              const currentSetpoint = parseFloat(row[setpointCol]) || 0;
-              const currentGyro = parseFloat(row[gyroCol]) || 0;
-              const currentPTerm = dataHeaders.includes(pTermCol) ? parseFloat(row[pTermCol]) || 0 : 0;
+              // Використовуємо getNumericColumnValue для отримання значень
+              const currentTime = getNumericColumnValue(row, 'time', dataHeaders) || (globalIndex * sampleTimeMs * 1000);
+              const currentSetpoint = getNumericColumnValue(row, setpointCol, dataHeaders);
+              const currentGyro = getNumericColumnValue(row, gyroCol, dataHeaders);
+              const currentPTerm = pTermCol ? getNumericColumnValue(row, pTermCol, dataHeaders) : 0;
               
               // Зберігаємо історію для аналізу
               timeHistory.push(currentTime);
@@ -378,8 +400,8 @@ const BlackboxAnalyzer = () => {
                   // Якщо не вийшли за межі поточної порції
                   if (i + j < chunk.length) {
                     const responseRow = chunk[i + j];
-                    const time = parseFloat(responseRow.time) || 0;
-                    const gyroValue = parseFloat(responseRow[gyroCol]) || 0;
+                    const time = getNumericColumnValue(responseRow, 'time', dataHeaders);
+                    const gyroValue = getNumericColumnValue(responseRow, gyroCol, dataHeaders);
                     response.push({ time: (time - startTime) / 1000, value: gyroValue }); // час в мс
                   } 
                   // Якщо вийшли за межі порції - збережемо позицію для подальшого аналізу
@@ -578,12 +600,20 @@ const BlackboxAnalyzer = () => {
     // Аналіз для кожної осі
     for (const axis of ['roll', 'pitch', 'yaw']) {
       const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
-      const gyroCol = `gyroADC[${axisIndex}]`;
-      const gyroUnfiltCol = `gyroUnfilt[${axisIndex}]`;
+      
+      // Використовуємо нову функцію пошуку колонок
+      const gyroCol = findColumnName(`gyroADC[${axisIndex}]`, dataHeaders);
+      const gyroUnfiltCol = findColumnName(`gyroUnfilt[${axisIndex}]`, dataHeaders);
+      
+      // Діагностичний лог
+      console.log(`Колонки для аналізу частотної характеристики осі ${axis}:`, {
+        gyro: gyroCol,
+        gyroUnfilt: gyroUnfiltCol
+      });
       
       // Перевіряємо наявність колонок
-      const hasFiltered = dataHeaders.includes(gyroCol);
-      const hasUnfiltered = dataHeaders.includes(gyroUnfiltCol);
+      const hasFiltered = gyroCol !== null;
+      const hasUnfiltered = gyroUnfiltCol !== null;
       
       if (hasFiltered) {
         try {
@@ -606,13 +636,14 @@ const BlackboxAnalyzer = () => {
           await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
             for (const row of chunk) {
               if (dataCollected < fftSize) {
-                const value = parseFloat(row[gyroCol]) || 0;
+                // Використовуємо getNumericColumnValue замість прямого доступу
+                const value = getNumericColumnValue(row, gyroCol, dataHeaders);
                 if (!isNaN(value)) {
                   gyroData[dataCollected] = value;
                   
                   // Якщо доступні нефільтровані дані, також їх зберігаємо
                   if (hasUnfiltered) {
-                    const unfiltValue = parseFloat(row[gyroUnfiltCol]) || 0;
+                    const unfiltValue = getNumericColumnValue(row, gyroUnfiltCol, dataHeaders);
                     gyroUnfiltData[dataCollected] = unfiltValue;
                   }
                   
@@ -790,19 +821,26 @@ const BlackboxAnalyzer = () => {
     for (const axis of ['roll', 'pitch', 'yaw']) {
       const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
       
-      // Отримуємо всі релевантні колонки даних
-      const gyroCol = `gyroADC[${axisIndex}]`;
-      const pTermCol = `axisP[${axisIndex}]`;
-      const iTermCol = `axisI[${axisIndex}]`;
-      const dTermCol = `axisD[${axisIndex}]`;
-      const sumCol = `axisSum[${axisIndex}]`;
+      // Отримуємо всі релевантні колонки даних з використанням нових функцій
+      const gyroCol = findColumnName(`gyroADC[${axisIndex}]`, dataHeaders);
+      const pTermCol = findColumnName(`axisP[${axisIndex}]`, dataHeaders);
+      const iTermCol = findColumnName(`axisI[${axisIndex}]`, dataHeaders);
+      const dTermCol = findColumnName(`axisD[${axisIndex}]`, dataHeaders);
+      const sumCol = findColumnName(`axisSum[${axisIndex}]`, dataHeaders);
+      
+      // Діагностичний лог
+      console.log(`Колонки для аналізу гармонійності осі ${axis}:`, {
+        gyro: gyroCol,
+        pTerm: pTermCol,
+        iTerm: iTermCol,
+        dTerm: dTermCol,
+        sum: sumCol
+      });
       
       // Перевіряємо наявність колонок
-      const hasGyro = dataHeaders.includes(gyroCol);
-      const hasPID = dataHeaders.includes(pTermCol) && 
-                    dataHeaders.includes(iTermCol) && 
-                    dataHeaders.includes(dTermCol);
-      const hasSum = dataHeaders.includes(sumCol);
+      const hasGyro = gyroCol !== null;
+      const hasPID = pTermCol !== null && iTermCol !== null && dTermCol !== null;
+      const hasSum = sumCol !== null;
       
       if (hasGyro) {
         try {
@@ -827,21 +865,21 @@ const BlackboxAnalyzer = () => {
           await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
             for (const row of chunk) {
               if (dataCollected < fftSize) {
-                const gyroValue = parseFloat(row[gyroCol]) || 0;
+                const gyroValue = getNumericColumnValue(row, gyroCol, dataHeaders);
                 
                 if (!isNaN(gyroValue)) {
                   gyroData[dataCollected] = gyroValue;
                   
                   // Якщо доступні PID-дані, збираємо і їх
                   if (hasPID) {
-                    pData[dataCollected] = parseFloat(row[pTermCol]) || 0;
-                    iData[dataCollected] = parseFloat(row[iTermCol]) || 0;
-                    dData[dataCollected] = parseFloat(row[dTermCol]) || 0;
+                    pData[dataCollected] = getNumericColumnValue(row, pTermCol, dataHeaders);
+                    iData[dataCollected] = getNumericColumnValue(row, iTermCol, dataHeaders);
+                    dData[dataCollected] = getNumericColumnValue(row, dTermCol, dataHeaders);
                   }
                   
                   // Якщо доступні дані про суму PID-компонентів
                   if (hasSum) {
-                    sumData[dataCollected] = parseFloat(row[sumCol]) || 0;
+                    sumData[dataCollected] = getNumericColumnValue(row, sumCol, dataHeaders);
                   }
                   
                   dataCollected++;
@@ -1070,9 +1108,19 @@ const BlackboxAnalyzer = () => {
     
     try {
       // Аналіз даних гіроскопа
-      // Перевіряємо наявність як фільтрованих, так і нефільтрованих даних
-      const hasUnfilteredGyro = dataHeaders.some(h => h.startsWith('gyroUnfilt['));
-      const hasFilteredGyro = dataHeaders.some(h => h.startsWith('gyroADC['));
+      // Перевіряємо наявність як фільтрованих, так і нефільтрованих даних з використанням нових функцій
+      const hasUnfilteredGyro = ['roll', 'pitch', 'yaw'].some(axis => {
+        const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
+        return findColumnName(`gyroUnfilt[${axisIndex}]`, dataHeaders) !== null;
+      });
+      
+      const hasFilteredGyro = ['roll', 'pitch', 'yaw'].some(axis => {
+        const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
+        return findColumnName(`gyroADC[${axisIndex}]`, dataHeaders) !== null;
+      });
+      
+      // Діагностичний лог
+      console.log(`Наявність даних гіроскопа: filtered=${hasFilteredGyro}, unfiltered=${hasUnfilteredGyro}`);
       
       if (hasUnfilteredGyro && hasFilteredGyro) {
         const gyroDataRaw = [];
@@ -1088,15 +1136,15 @@ const BlackboxAnalyzer = () => {
         await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
           for (const row of chunk) {
             const rawData = {
-              x: parseFloat(row['gyroUnfilt[0]']) || 0,
-              y: parseFloat(row['gyroUnfilt[1]']) || 0,
-              z: parseFloat(row['gyroUnfilt[2]']) || 0
+              x: getNumericColumnValue(row, 'gyroUnfilt[0]', dataHeaders),
+              y: getNumericColumnValue(row, 'gyroUnfilt[1]', dataHeaders),
+              z: getNumericColumnValue(row, 'gyroUnfilt[2]', dataHeaders)
             };
             
             const filteredData = {
-              x: parseFloat(row['gyroADC[0]']) || 0,
-              y: parseFloat(row['gyroADC[1]']) || 0,
-              z: parseFloat(row['gyroADC[2]']) || 0
+              x: getNumericColumnValue(row, 'gyroADC[0]', dataHeaders),
+              y: getNumericColumnValue(row, 'gyroADC[1]', dataHeaders),
+              z: getNumericColumnValue(row, 'gyroADC[2]', dataHeaders)
             };
             
             gyroDataRaw.push(rawData);
@@ -1151,8 +1199,8 @@ const BlackboxAnalyzer = () => {
         }
         
         // Аналіз шуму моторів з використанням даних eRPM
-        const hasERPM = dataHeaders.some(h => h.startsWith('eRPM['));
-        const hasMotor = dataHeaders.some(h => h.startsWith('motor['));
+        const hasERPM = dataHeaders.some(h => findColumnName('eRPM[0]', dataHeaders) !== null);
+        const hasMotor = dataHeaders.some(h => findColumnName('motor[0]', dataHeaders) !== null);
         
         if (hasERPM && hasMotor) {
           // Збираємо дані моторів та їх обертів
@@ -1160,18 +1208,18 @@ const BlackboxAnalyzer = () => {
           const eRpmData = [];
           
           for (let motorIdx = 0; motorIdx < 4; motorIdx++) {
-            const motorCol = `motor[${motorIdx}]`;
-            const eRpmCol = `eRPM[${motorIdx}]`;
+            const motorCol = findColumnName(`motor[${motorIdx}]`, dataHeaders);
+            const eRpmCol = findColumnName(`eRPM[${motorIdx}]`, dataHeaders);
             
-            if (dataHeaders.includes(motorCol) && dataHeaders.includes(eRpmCol)) {
+            if (motorCol && eRpmCol) {
               const motorValues = [];
               const eRpmValues = [];
               
               // Збираємо дані порційно
               await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
                 for (const row of chunk) {
-                  const motorValue = parseFloat(row[motorCol]) || 0;
-                  const eRpmValue = parseFloat(row[eRpmCol]) || 0;
+                  const motorValue = getNumericColumnValue(row, motorCol, dataHeaders);
+                  const eRpmValue = getNumericColumnValue(row, eRpmCol, dataHeaders);
                   
                   motorValues.push(motorValue);
                   eRpmValues.push(eRpmValue);
@@ -1294,11 +1342,11 @@ const BlackboxAnalyzer = () => {
           const identifiedNoiseFrequencies = [];
           
           // Аналізуємо спектр гіроскопа для виявлення шумів, які потрібно фільтрувати
-          for (const axis of ['x', 'y', 'z']) {
-            const axisIndex = { x: 0, y: 1, z: 2 }[axis];
-            const gyroCol = `gyroUnfilt[${axisIndex}]`;
+          for (const axis of ['roll', 'pitch', 'yaw']) {
+            const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
+            const gyroUnfiltCol = findColumnName(`gyroUnfilt[${axisIndex}]`, dataHeaders);
             
-            if (dataHeaders.includes(gyroCol)) {
+            if (gyroUnfiltCol) {
               try {
                 const fftSize = 1024;
                 const gyroData = [];
@@ -1306,7 +1354,7 @@ const BlackboxAnalyzer = () => {
                 // Збираємо дані порційно
                 await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
                   for (const row of chunk) {
-                    const value = parseFloat(row[gyroCol]) || 0;
+                    const value = getNumericColumnValue(row, gyroUnfiltCol, dataHeaders);
                     if (!isNaN(value)) {
                       gyroData.push(value);
                       if (gyroData.length >= fftSize) break;
@@ -1391,10 +1439,14 @@ const BlackboxAnalyzer = () => {
             
             for (const noiseFreq of identifiedNoiseFrequencies.slice(0, 3)) { // Аналізуємо топ-3 частоти
               const axis = noiseFreq.axis;
-              const axisIndex = { x: 0, y: 1, z: 2 }[axis];
+              const axisIndex = { roll: 0, pitch: 1, yaw: 2 }[axis];
               
               try {
                 const fftSizeSmall = 256; // Менший розмір для швидшого обчислення
+                
+                // Отримуємо назви колонок
+                const unfiltCol = findColumnName(`gyroUnfilt[${axisIndex}]`, dataHeaders);
+                const filtCol = findColumnName(`gyroADC[${axisIndex}]`, dataHeaders);
                 
                 // Нефільтровані дані
                 const rawData = [];
@@ -1404,8 +1456,8 @@ const BlackboxAnalyzer = () => {
                 // Збираємо дані порційно
                 await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
                   for (const row of chunk) {
-                    const rawValue = parseFloat(row[`gyroUnfilt[${axisIndex}]`]) || 0;
-                    const filteredValue = parseFloat(row[`gyroADC[${axisIndex}]`]) || 0;
+                    const rawValue = getNumericColumnValue(row, unfiltCol, dataHeaders);
+                    const filteredValue = getNumericColumnValue(row, filtCol, dataHeaders);
                     
                     rawData.push(rawValue);
                     filteredData.push(filteredValue);
@@ -1493,26 +1545,28 @@ const BlackboxAnalyzer = () => {
         
         // Аналіз D-term фільтрів
         // В даному випадку робимо спрощений аналіз через відсутність прямого доступу до D-term сигналів
-        const dTermSignal = dataHeaders.some(h => h.startsWith('axisD['));
+        const dTermCol = findColumnName('axisD[0]', dataHeaders) || 
+                        findColumnName('axisD[1]', dataHeaders) || 
+                        findColumnName('axisD[2]', dataHeaders);
         
         if (dtermLowpassHz > 0) {
           const phaseDelay = 1000 / (2 * Math.PI * dtermLowpassHz);
           
-          if (dTermSignal) {
+          if (dTermCol) {
             // Спробуємо проаналізувати D-term сигнали безпосередньо
             const dTermData = [];
             
             // Збираємо D-term дані для всіх осей
             for (let axisIdx = 0; axisIdx < 3; axisIdx++) {
-              const dTermCol = `axisD[${axisIdx}]`;
+              const dTermAxisCol = findColumnName(`axisD[${axisIdx}]`, dataHeaders);
               
-              if (dataHeaders.includes(dTermCol)) {
+              if (dTermAxisCol) {
                 const axisData = [];
                 
                 // Збираємо дані порційно
                 await processInChunks(flightData.slice(0, collectSize), chunkSize, (chunk) => {
                   for (const row of chunk) {
-                    const value = parseFloat(row[dTermCol]) || 0;
+                    const value = getNumericColumnValue(row, dTermAxisCol, dataHeaders);
                     axisData.push(value);
                     if (axisData.length >= 1024) break;
                   }
@@ -1746,7 +1800,7 @@ const BlackboxAnalyzer = () => {
     try {
       // Беремо найпотужніші шумові частоти від моторів
       const motorFrequencies = motorNoiseFrequencies.flatMap(motor => 
-        motor.frequencies.map(f => f.frequency)
+        motor.frequencies?.map(f => f.frequency) || []
       );
       
       // Аналізуємо, наскільки ці частоти фільтруються в гіроскопі
@@ -1755,8 +1809,6 @@ const BlackboxAnalyzer = () => {
       let validFreqCount = 0;
       
       for (const axis of ['x', 'y', 'z']) {
-        const axisIndex = { x: 0, y: 1, z: 2 }[axis];
-        
         // Нефільтровані дані
         const rawData = gyroDataRaw.map(d => d[axis]).slice(0, fftSize);
         // Доповнюємо нулями
@@ -1768,54 +1820,55 @@ const BlackboxAnalyzer = () => {
         const paddedFilteredData = [...filteredData, ...Array(fftSize - filteredData.length).fill(0)];
         
         // FFT для сирих даних
-        const rawFft = new FFT(fftSize);
-        const rawOut = new Array(fftSize * 2);
+// FFT для сирих даних
+const rawFft = new FFT(fftSize);
+const rawOut = new Array(fftSize * 2);
         
-        // Prepare raw complex data
-        const rawComplexData = new Array(fftSize * 2).fill(0);
-        for (let i = 0; i < fftSize; i++) {
-          rawComplexData[i * 2] = paddedRawData[i]; // Real part
-          rawComplexData[i * 2 + 1] = 0;           // Imaginary part
-        }
+// Prepare raw complex data
+const rawComplexData = new Array(fftSize * 2).fill(0);
+for (let i = 0; i < fftSize; i++) {
+  rawComplexData[i * 2] = paddedRawData[i]; // Real part
+  rawComplexData[i * 2 + 1] = 0;           // Imaginary part
+}
         
-        // Run the FFT for raw data
-        rawFft.transform(rawOut, rawComplexData);
+// Run the FFT for raw data
+rawFft.transform(rawOut, rawComplexData);
         
-        // FFT для фільтрованих даних
-        const filteredFft = new FFT(fftSize);
-        const filteredOut = new Array(fftSize * 2);
+// FFT для фільтрованих даних
+const filteredFft = new FFT(fftSize);
+const filteredOut = new Array(fftSize * 2);
         
-        // Prepare filtered complex data
-        const filteredComplexData = new Array(fftSize * 2).fill(0);
-        for (let i = 0; i < fftSize; i++) {
-          filteredComplexData[i * 2] = paddedFilteredData[i]; // Real part
-          filteredComplexData[i * 2 + 1] = 0;                // Imaginary part
-        }
+// Prepare filtered complex data
+const filteredComplexData = new Array(fftSize * 2).fill(0);
+for (let i = 0; i < fftSize; i++) {
+  filteredComplexData[i * 2] = paddedFilteredData[i]; // Real part
+  filteredComplexData[i * 2 + 1] = 0;                // Imaginary part
+}
         
-        // Run the FFT for filtered data
-        filteredFft.transform(filteredOut, filteredComplexData);
+// Run the FFT for filtered data
+filteredFft.transform(filteredOut, filteredComplexData);
         
-        // Перевіряємо кожну частоту мотора
-        for (const freq of motorFrequencies) {
-          const freqIndex = Math.round(freq / (1000 / fftSize));
-          
-          if (freqIndex > 0 && freqIndex < fftSize / 2) {
-            const rawReal = rawOut[freqIndex * 2];
-            const rawImag = rawOut[freqIndex * 2 + 1];
-            const rawMagnitude = Math.sqrt(rawReal * rawReal + rawImag * rawImag);
-            
-            const filteredReal = filteredOut[freqIndex * 2];
-            const filteredImag = filteredOut[freqIndex * 2 + 1];
-            const filteredMagnitude = Math.sqrt(filteredReal * filteredReal + filteredImag * filteredImag);
-            
-            if (rawMagnitude > 0) {
-              // Коефіцієнт зменшення шуму на цій частоті
-              const reduction = 1 - (filteredMagnitude / rawMagnitude);
-              totalReduction += reduction;
-              validFreqCount++;
-            }
-          }
-        }
+// Перевіряємо кожну частоту мотора
+for (const freq of motorFrequencies) {
+  const freqIndex = Math.round(freq / (1000 / fftSize));
+  
+  if (freqIndex > 0 && freqIndex < fftSize / 2) {
+    const rawReal = rawOut[freqIndex * 2];
+    const rawImag = rawOut[freqIndex * 2 + 1];
+    const rawMagnitude = Math.sqrt(rawReal * rawReal + rawImag * rawImag);
+    
+    const filteredReal = filteredOut[freqIndex * 2];
+    const filteredImag = filteredOut[freqIndex * 2 + 1];
+    const filteredMagnitude = Math.sqrt(filteredReal * filteredReal + filteredImag * filteredImag);
+    
+    if (rawMagnitude > 0) {
+      // Коефіцієнт зменшення шуму на цій частоті
+      const reduction = 1 - (filteredMagnitude / rawMagnitude);
+      totalReduction += reduction;
+      validFreqCount++;
+    }
+  }
+}
       }
       
       // Середня ефективність
@@ -2100,456 +2153,458 @@ const BlackboxAnalyzer = () => {
     return recommendations;
   };
 
-  return (
-    <div className="bg-white shadow-md rounded-lg p-6 mb-8">
-      <h2 className="text-2xl font-bold mb-4 text-gray-800">Аналізатор Blackbox</h2>
-      
-      {!flightData || flightData.length === 0 ? (
-        <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
-          <div className="flex">
-            <div className="flex-shrink-0">
-              <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-              </svg>
-            </div>
-            <div className="ml-3">
-              <p className="text-sm text-blue-700">
-                Завантажте лог-файл Blackbox перш ніж запускати аналіз.
-              </p>
-            </div>
+ 
+return (
+  <div className="bg-white shadow-md rounded-lg p-6 mb-8">
+    <h2 className="text-2xl font-bold mb-4 text-gray-800">Аналізатор Blackbox</h2>
+    
+    {!flightData || flightData.length === 0 ? (
+      <div className="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
+        <div className="flex">
+          <div className="flex-shrink-0">
+            <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+            </svg>
           </div>
-        </div>
-      ) : (
-        <>
-          {/* Кнопка запуску аналізу */}
-          <div className="mb-6">
-            <button
-              onClick={analyzeData}
-              disabled={analyzing}
-              className={`py-2 px-4 rounded-md font-medium ${
-                analyzing
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : 'bg-blue-500 hover:bg-blue-600 text-white'
-              }`}
-            >
-              {analyzing ? 'Аналіз...' : 'Запустити аналіз даних'}
-            </button>
-            <p className="mt-2 text-sm text-gray-600">
-              Аналіз може зайняти кілька секунд, залежно від обсягу даних.
+          <div className="ml-3">
+            <p className="text-sm text-blue-700">
+              Завантажте лог-файл Blackbox перш ніж запускати аналіз.
             </p>
           </div>
+        </div>
+      </div>
+    ) : (
+      <>
+        {/* Кнопка запуску аналізу */}
+        <div className="mb-6">
+          <button
+            onClick={analyzeData}
+            disabled={analyzing}
+            className={`py-2 px-4 rounded-md font-medium ${
+              analyzing
+                ? 'bg-gray-400 cursor-not-allowed'
+                : 'bg-blue-500 hover:bg-blue-600 text-white'
+            }`}
+          >
+            {analyzing ? 'Аналіз...' : 'Запустити аналіз даних'}
+          </button>
+          <p className="mt-2 text-sm text-gray-600">
+            Аналіз може зайняти кілька секунд, залежно від обсягу даних.
+          </p>
+        </div>
 
-          {/* Прогрес-бар */}
-          {analyzing && (
-            <div className="mb-6">
-              <div className="w-full bg-gray-200 rounded-full h-4">
-                <div
-                  className="bg-blue-500 h-4 rounded-full transition-all duration-300"
-                  style={{ width: `${progress}%` }}
-                ></div>
-              </div>
-              <p className="mt-1 text-sm text-gray-600 text-right">
-                {progress}% завершено
-              </p>
+        {/* Прогрес-бар */}
+        {analyzing && (
+          <div className="mb-6">
+            <div className="w-full bg-gray-200 rounded-full h-4">
+              <div
+                className="bg-blue-500 h-4 rounded-full transition-all duration-300"
+                style={{ width: `${progress}%` }}
+              ></div>
             </div>
-          )}
+            <p className="mt-1 text-sm text-gray-600 text-right">
+              {progress}% завершено
+            </p>
+          </div>
+        )}
 
-          {/* Повідомлення про помилку */}
-          {error && (
-            <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-6">
-              <div className="flex">
-                <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                  </svg>
-                </div>
-                <div className="ml-3">
-                  <p className="text-sm text-red-700">{error}</p>
-                </div>
+        {/* Повідомлення про помилку */}
+        {error && (
+          <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-6">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm text-red-700">{error}</p>
               </div>
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Результати аналізу */}
-          {analysisResults && (
-            <div className="mt-6">
-              <h3 className="text-xl font-semibold mb-4 text-gray-800">Результати аналізу</h3>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                {/* Аналіз відхилень */}
-                <div className="bg-gray-50 p-4 rounded-lg shadow">
-                  <h4 className="font-medium text-lg mb-2">Аналіз відхилень</h4>
-                  {analysisResults.errorMetrics && Object.keys(analysisResults.errorMetrics).length > 0 ? (
-                    <div className="space-y-3">
-                      {Object.entries(analysisResults.errorMetrics).map(([axis, metrics]) => (
-                        <div key={axis} className="border-b pb-2">
-                          <p className="font-medium text-gray-700 capitalize">{axis}</p>
-                          <div className="grid grid-cols-2 gap-2 mt-1">
-                            <div>
-                              <p className="text-sm text-gray-500">RMS відхилення:</p>
-                              <p className="font-mono">{metrics.rmsError.toFixed(2)}</p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">Макс. відхилення:</p>
-                              <p className="font-mono">{metrics.maxError.toFixed(2)}</p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">Сер. відхилення:</p>
-                              <p className="font-mono">{metrics.meanError.toFixed(2)}</p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">Станд. відхилення:</p>
-                              <p className="font-mono">{metrics.stdDeviation.toFixed(2)}</p>
-                            </div>
+        {/* Результати аналізу */}
+        {analysisResults && (
+          <div className="mt-6">
+            <h3 className="text-xl font-semibold mb-4 text-gray-800">Результати аналізу</h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              {/* Аналіз відхилень */}
+              <div className="bg-gray-50 p-4 rounded-lg shadow">
+                <h4 className="font-medium text-lg mb-2">Аналіз відхилень</h4>
+                {analysisResults.errorMetrics && Object.keys(analysisResults.errorMetrics).length > 0 ? (
+                  <div className="space-y-3">
+                    {Object.entries(analysisResults.errorMetrics).map(([axis, metrics]) => (
+                      <div key={axis} className="border-b pb-2">
+                        <p className="font-medium text-gray-700 capitalize">{axis}</p>
+                        <div className="grid grid-cols-2 gap-2 mt-1">
+                          <div>
+                            <p className="text-sm text-gray-500">RMS відхилення:</p>
+                            <p className="font-mono">{metrics.rmsError.toFixed(2)}</p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">Макс. відхилення:</p>
+                            <p className="font-mono">{metrics.maxError.toFixed(2)}</p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">Сер. відхилення:</p>
+                            <p className="font-mono">{metrics.meanError.toFixed(2)}</p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">Станд. відхилення:</p>
+                            <p className="font-mono">{metrics.stdDeviation.toFixed(2)}</p>
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-500">Немає даних для аналізу відхилень.</p>
-                  )}
-                </div>
-
-                {/* Аналіз швидкості реакції */}
-                <div className="bg-gray-50 p-4 rounded-lg shadow">
-                  <h4 className="font-medium text-lg mb-2">Аналіз швидкості реакції</h4>
-                  {analysisResults.stepResponseMetrics && Object.keys(analysisResults.stepResponseMetrics).length > 0 ? (
-                    <div className="space-y-3">
-                      {Object.entries(analysisResults.stepResponseMetrics).map(([axis, metrics]) => (
-                        <div key={axis} className="border-b pb-2">
-                          <p className="font-medium text-gray-700 capitalize">{axis}</p>
-                          <div className="grid grid-cols-2 gap-2 mt-1">
-                            <div>
-                              <p className="text-sm text-gray-500">Час встановлення:</p>
-                              <p className="font-mono">{metrics.settlingTime.toFixed(2)} мс</p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">Перерегулювання:</p>
-                              <p className="font-mono">{metrics.overshoot.toFixed(2)}%</p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">Час наростання:</p>
-                              <p className="font-mono">{metrics.riseTime.toFixed(2)} мс</p>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-500">Немає даних для аналізу швидкості реакції.</p>
-                  )}
-                </div>
-
-                {/* Аналіз частотної характеристики */}
-                <div className="bg-gray-50 p-4 rounded-lg shadow">
-                  <h4 className="font-medium text-lg mb-2">Частотна характеристика</h4>
-                  {analysisResults.frequencyAnalysis && Object.keys(analysisResults.frequencyAnalysis).length > 0 ? (
-                    <div className="space-y-3">
-                      {Object.entries(analysisResults.frequencyAnalysis).map(([axis, analysis]) => (
-                        <div key={axis} className="border-b pb-2">
-                          <p className="font-medium text-gray-700 capitalize">{axis}</p>
-                          <div className="mt-1">
-                            <p className="text-sm text-gray-500">Домінуючі частоти:</p>
-                            {analysis.dominantFrequencies && analysis.dominantFrequencies.length > 0 ? (
-                              <ul className="list-disc list-inside pl-2 text-sm">
-                                {analysis.dominantFrequencies.map((freq, idx) => (
-                                  <li key={idx} className="font-mono">
-                                    {freq.frequency.toFixed(1)} Гц (амплітуда: {freq.magnitude.toFixed(1)})
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="text-sm text-gray-500">Не виявлено.</p>
-                            )}
-                            <p className="text-sm text-gray-500 mt-1">Рівень шуму:</p>
-                            <p className="font-mono">{analysis.noiseLevel.toFixed(2)}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-500">Немає даних для аналізу частотної характеристики.</p>
-                  )}
-                </div>
-
-                {/* Аналіз гармонійності руху */}
-                <div className="bg-gray-50 p-4 rounded-lg shadow">
-                  <h4 className="font-medium text-lg mb-2">Аналіз гармонійності руху</h4>
-                  {analysisResults.harmonicAnalysis && Object.keys(analysisResults.harmonicAnalysis).length > 0 ? (
-                    <div className="space-y-3">
-                      {Object.entries(analysisResults.harmonicAnalysis).map(([axis, analysis]) => (
-                        <div key={axis} className="border-b pb-2">
-                          <p className="font-medium text-gray-700 capitalize">{axis}</p>
-                          <div className="grid grid-cols-2 gap-2 mt-1">
-                            <div>
-                              <p className="text-sm text-gray-500">THD (коеф. гарм. спотворень):</p>
-                              <p className="font-mono">{analysis.thd.toFixed(2)}%</p>
-                            </div>
-                            <div>
-                              <p className="text-sm text-gray-500">Оцінка стабільності:</p>
-                              <p className="font-mono">{analysis.stabilityScore.toFixed(1)}/100</p>
-                            </div>
-                            <div className="col-span-2">
-                              <p className="text-sm text-gray-500">Небажані коливання:</p>
-                              <p className={`font-medium ${analysis.oscillationDetected ? 'text-red-500' : 'text-green-500'}`}>
-                                {analysis.oscillationDetected ? 'Виявлено' : 'Не виявлено'}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-sm text-gray-500">Немає даних для аналізу гармонійності руху.</p>
-                  )}
-                </div>
-              </div>
-
-              {/* Аналіз фільтрів */}
-              <div className="bg-gray-50 p-4 rounded-lg shadow mb-6">
-                <h4 className="font-medium text-lg mb-2">Аналіз фільтрів</h4>
-                {analysisResults.filterAnalysis ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {/* Гіро фільтри */}
-                    <div className="border-b pb-2">
-                      <p className="font-medium text-gray-700">Фільтри гіроскопа</p>
-                      <div className="mt-1 space-y-1">
-                        <p className="text-sm">
-                          <span className="text-gray-500">Ефективність:</span>
-                          <span className="ml-2 font-mono">{(analysisResults.filterAnalysis.gyroFilters.effectiveness * 100).toFixed(1)}%</span>
-                        </p>
-                        <p className="text-sm">
-                          <span className="text-gray-500">Фазова затримка:</span>
-                          <span className="ml-2 font-mono">{analysisResults.filterAnalysis.gyroFilters.phaseDelay.toFixed(2)} мс</span>
-                        </p>
-                        <p className="text-sm">
-                          <span className="text-gray-500">Рекомендована частота:</span>
-                          <span className="ml-2 font-mono">{analysisResults.filterAnalysis.gyroFilters.recommendedFrequency} Гц</span>
-                        </p>
                       </div>
-                    </div>
-
-                    {/* D-term фільтри */}
-                    <div className="border-b pb-2">
-                      <p className="font-medium text-gray-700">D-term фільтри</p>
-                      <div className="mt-1 space-y-1">
-                        <p className="text-sm">
-                          <span className="text-gray-500">Ефективність:</span>
-                          <span className="ml-2 font-mono">{(analysisResults.filterAnalysis.dtermFilters.effectiveness * 100).toFixed(1)}%</span>
-                        </p>
-                        <p className="text-sm">
-                          <span className="text-gray-500">Фазова затримка:</span>
-                          <span className="ml-2 font-mono">{analysisResults.filterAnalysis.dtermFilters.phaseDelay.toFixed(2)} мс</span>
-                        </p>
-                        <p className="text-sm">
-                          <span className="text-gray-500">Рекомендована частота:</span>
-                          <span className="ml-2 font-mono">{analysisResults.filterAnalysis.dtermFilters.recommendedFrequency} Гц</span>
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Notch фільтри */}
-                    <div className="border-b pb-2">
-                      <p className="font-medium text-gray-700">Notch фільтри</p>
-                      <div className="mt-1 space-y-1">
-                        <p className="text-sm">
-                          <span className="text-gray-500">Ефективність:</span>
-                          <span className="ml-2 font-mono">{(analysisResults.filterAnalysis.notchFilters.effectiveness * 100).toFixed(1)}%</span>
-                        </p>
-                        <p className="text-sm text-gray-500">Виявлені частоти шуму:</p>
-                        {analysisResults.filterAnalysis.notchFilters.identifiedNoiseFrequencies && 
-                         analysisResults.filterAnalysis.notchFilters.identifiedNoiseFrequencies.length > 0 ? (
-                          <ul className="list-disc list-inside pl-2 text-sm">
-                            {analysisResults.filterAnalysis.notchFilters.identifiedNoiseFrequencies.map((noise, idx) => (
-                              <li key={idx} className="font-mono">
-                                {noise.frequency.toFixed(1)} Гц (амплітуда: {noise.magnitude.toFixed(1)}, ось: {noise.axis})
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="text-sm text-gray-500">Не виявлено.</p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* RPM фільтри */}
-                    <div className="border-b pb-2">
-                      <p className="font-medium text-gray-700">RPM фільтри</p>
-                      <div className="mt-1 space-y-1">
-                        <p className="text-sm">
-                          <span className="text-gray-500">Ефективність:</span>
-                          <span className="ml-2 font-mono">{(analysisResults.filterAnalysis.rpmFilters.effectiveness * 100).toFixed(1)}%</span>
-                        </p>
-                        <p className="text-sm text-gray-500">Частоти шуму моторів:</p>
-                        {analysisResults.filterAnalysis.rpmFilters.motorNoiseFrequencies && 
-                         analysisResults.filterAnalysis.rpmFilters.motorNoiseFrequencies.length > 0 ? (
-                          <ul className="list-disc list-inside pl-2 text-sm">
-                            {analysisResults.filterAnalysis.rpmFilters.motorNoiseFrequencies.map((motor, idx) => (
-                              <li key={idx} className="font-mono">
-                                Мотор {motor.motorIndex + 1}: 
-                                {motor.frequencies.map((freq, i) => 
-                                  `${i > 0 ? ', ' : ' '}${freq.frequency.toFixed(1)} Гц`
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        ) : (
-                          <p className="text-sm text-gray-500">Не виявлено.</p>
-                        )}
-                      </div>
-                    </div>
+                    ))}
                   </div>
                 ) : (
-                  <p className="text-sm text-gray-500">Немає даних для аналізу фільтрів.</p>
+                  <p className="text-sm text-gray-500">Немає даних для аналізу відхилень.</p>
+                )}
+              </div>
+
+              {/* Аналіз швидкості реакції */}
+              <div className="bg-gray-50 p-4 rounded-lg shadow">
+                <h4 className="font-medium text-lg mb-2">Аналіз швидкості реакції</h4>
+                {analysisResults.stepResponseMetrics && Object.keys(analysisResults.stepResponseMetrics).length > 0 ? (
+                  <div className="space-y-3">
+                    {Object.entries(analysisResults.stepResponseMetrics).map(([axis, metrics]) => (
+                      <div key={axis} className="border-b pb-2">
+                        <p className="font-medium text-gray-700 capitalize">{axis}</p>
+                        <div className="grid grid-cols-2 gap-2 mt-1">
+                          <div>
+                            <p className="text-sm text-gray-500">Час встановлення:</p>
+                            <p className="font-mono">{metrics.settlingTime.toFixed(2)} мс</p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">Перерегулювання:</p>
+                            <p className="font-mono">{metrics.overshoot.toFixed(2)}%</p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">Час наростання:</p>
+                            <p className="font-mono">{metrics.riseTime.toFixed(2)} мс</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">Немає даних для аналізу швидкості реакції.</p>
+                )}
+              </div>
+
+              {/* Аналіз частотної характеристики */}
+              <div className="bg-gray-50 p-4 rounded-lg shadow">
+                <h4 className="font-medium text-lg mb-2">Частотна характеристика</h4>
+                {analysisResults.frequencyAnalysis && Object.keys(analysisResults.frequencyAnalysis).length > 0 ? (
+                  <div className="space-y-3">
+                    {Object.entries(analysisResults.frequencyAnalysis).map(([axis, analysis]) => (
+                      <div key={axis} className="border-b pb-2">
+                        <p className="font-medium text-gray-700 capitalize">{axis}</p>
+                        <div className="mt-1">
+                          <p className="text-sm text-gray-500">Домінуючі частоти:</p>
+                          {analysis.dominantFrequencies && analysis.dominantFrequencies.length > 0 ? (
+                            <ul className="list-disc list-inside pl-2 text-sm">
+                              {analysis.dominantFrequencies.map((freq, idx) => (
+                                <li key={idx} className="font-mono">
+                                  {freq.frequency.toFixed(1)} Гц (амплітуда: {freq.magnitude.toFixed(1)})
+                                </li>
+                              ))}
+                            </ul>
+                          ) : (
+                            <p className="text-sm text-gray-500">Не виявлено.</p>
+                          )}
+                          <p className="text-sm text-gray-500 mt-1">Рівень шуму:</p>
+                          <p className="font-mono">{analysis.noiseLevel.toFixed(2)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">Немає даних для аналізу частотної характеристики.</p>
+                )}
+              </div>
+
+              {/* Аналіз гармонійності руху */}
+              <div className="bg-gray-50 p-4 rounded-lg shadow">
+                <h4 className="font-medium text-lg mb-2">Аналіз гармонійності руху</h4>
+                {analysisResults.harmonicAnalysis && Object.keys(analysisResults.harmonicAnalysis).length > 0 ? (
+                  <div className="space-y-3">
+                    {Object.entries(analysisResults.harmonicAnalysis).map(([axis, analysis]) => (
+                      <div key={axis} className="border-b pb-2">
+                        <p className="font-medium text-gray-700 capitalize">{axis}</p>
+                        <div className="grid grid-cols-2 gap-2 mt-1">
+                          <div>
+                            <p className="text-sm text-gray-500">THD (коеф. гарм. спотворень):</p>
+                            <p className="font-mono">{analysis.thd.toFixed(2)}%</p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">Оцінка стабільності:</p>
+                            <p className="font-mono">{analysis.stabilityScore.toFixed(1)}/100</p>
+                          </div>
+                          <div className="col-span-2">
+                            <p className="text-sm text-gray-500">Небажані коливання:</p>
+                            <p className={`font-medium ${analysis.oscillationDetected ? 'text-red-500' : 'text-green-500'}`}>
+                              {analysis.oscillationDetected ? 'Виявлено' : 'Не виявлено'}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-gray-500">Немає даних для аналізу гармонійності руху.</p>
                 )}
               </div>
             </div>
-          )}
 
-          {/* Рекомендації */}
-          {recommendations && (
-            <div className="mt-6">
-              <h3 className="text-xl font-semibold mb-4 text-gray-800">Рекомендації</h3>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                {/* PID рекомендації */}
-                <div className="bg-gray-50 p-4 rounded-lg shadow">
-                  <h4 className="font-medium text-lg mb-2">Рекомендовані PID</h4>
-                  <div className="space-y-4">
-                    {/* Roll */}
-                    <div className="border-b pb-2">
-                      <p className="font-medium text-gray-700">Roll</p>
-                      <div className="grid grid-cols-4 gap-2 mt-1">
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">P</p>
-                          <p className="font-mono">{recommendations.pid.roll.p}</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">I</p>
-                          <p className="font-mono">{recommendations.pid.roll.i}</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">D</p>
-                          <p className="font-mono">{recommendations.pid.roll.d}</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">F</p>
-                          <p className="font-mono">{recommendations.pid.roll.f}</p>
-                        </div>
+            {/* Аналіз фільтрів */}
+            <div className="bg-gray-50 p-4 rounded-lg shadow mb-6">
+              <h4 className="font-medium text-lg mb-2">Аналіз фільтрів</h4>
+              {analysisResults.filterAnalysis ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Гіро фільтри */}
+                  <div className="border-b pb-2">
+                    <p className="font-medium text-gray-700">Фільтри гіроскопа</p>
+                    <div className="mt-1 space-y-1">
+                      <p className="text-sm">
+                        <span className="text-gray-500">Ефективність:</span>
+                        <span className="ml-2 font-mono">{(analysisResults.filterAnalysis.gyroFilters.effectiveness * 100).toFixed(1)}%</span>
+                      </p>
+                      <p className="text-sm">
+                        <span className="text-gray-500">Фазова затримка:</span>
+                        <span className="ml-2 font-mono">{analysisResults.filterAnalysis.gyroFilters.phaseDelay.toFixed(2)} мс</span>
+                      </p>
+                      <p className="text-sm">
+                        <span className="text-gray-500">Рекомендована частота:</span>
+                        <span className="ml-2 font-mono">{analysisResults.filterAnalysis.gyroFilters.recommendedFrequency} Гц</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* D-term фільтри */}
+                  <div className="border-b pb-2">
+                    <p className="font-medium text-gray-700">D-term фільтри</p>
+                    <div className="mt-1 space-y-1">
+                      <p className="text-sm">
+                        <span className="text-gray-500">Ефективність:</span>
+                        <span className="ml-2 font-mono">{(analysisResults.filterAnalysis.dtermFilters.effectiveness * 100).toFixed(1)}%</span>
+                      </p>
+                      <p className="text-sm">
+                        <span className="text-gray-500">Фазова затримка:</span>
+                        <span className="ml-2 font-mono">{analysisResults.filterAnalysis.dtermFilters.phaseDelay.toFixed(2)} мс</span>
+                      </p>
+                      <p className="text-sm">
+                        <span className="text-gray-500">Рекомендована частота:</span>
+                        <span className="ml-2 font-mono">{analysisResults.filterAnalysis.dtermFilters.recommendedFrequency} Гц</span>
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Notch фільтри */}
+                  <div className="border-b pb-2">
+                    <p className="font-medium text-gray-700">Notch фільтри</p>
+                    <div className="mt-1 space-y-1">
+                      <p className="text-sm">
+                        <span className="text-gray-500">Ефективність:</span>
+                        <span className="ml-2 font-mono">{(analysisResults.filterAnalysis.notchFilters.effectiveness * 100).toFixed(1)}%</span>
+                      </p>
+                      <p className="text-sm text-gray-500">Виявлені частоти шуму:</p>
+                      {analysisResults.filterAnalysis.notchFilters.identifiedNoiseFrequencies && 
+                       analysisResults.filterAnalysis.notchFilters.identifiedNoiseFrequencies.length > 0 ? (
+                        <ul className="list-disc list-inside pl-2 text-sm">
+                          {analysisResults.filterAnalysis.notchFilters.identifiedNoiseFrequencies.map((noise, idx) => (
+                            <li key={idx} className="font-mono">
+                              {noise.frequency.toFixed(1)} Гц (амплітуда: {noise.magnitude.toFixed(1)}, ось: {noise.axis})
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-gray-500">Не виявлено.</p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* RPM фільтри */}
+                  <div className="border-b pb-2">
+                    <p className="font-medium text-gray-700">RPM фільтри</p>
+                    <div className="mt-1 space-y-1">
+                      <p className="text-sm">
+                        <span className="text-gray-500">Ефективність:</span>
+                        <span className="ml-2 font-mono">{(analysisResults.filterAnalysis.rpmFilters.effectiveness * 100).toFixed(1)}%</span>
+                      </p>
+                      <p className="text-sm text-gray-500">Частоти шуму моторів:</p>
+                      {analysisResults.filterAnalysis.rpmFilters.motorNoiseFrequencies && 
+                       analysisResults.filterAnalysis.rpmFilters.motorNoiseFrequencies.length > 0 ? (
+                        <ul className="list-disc list-inside pl-2 text-sm">
+                          {analysisResults.filterAnalysis.rpmFilters.motorNoiseFrequencies.map((motor, idx) => (
+                            <li key={idx} className="font-mono">
+                              Мотор {motor.motorIndex + 1}: 
+                              {motor.frequencies.map((freq, i) => 
+                                `${i > 0 ? ', ' : ' '}${freq.frequency.toFixed(1)} Гц`
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="text-sm text-gray-500">Не виявлено.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">Немає даних для аналізу фільтрів.</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Рекомендації */}
+        {recommendations && (
+          <div className="mt-6">
+            <h3 className="text-xl font-semibold mb-4 text-gray-800">Рекомендації</h3>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              {/* PID рекомендації */}
+              <div className="bg-gray-50 p-4 rounded-lg shadow">
+                <h4 className="font-medium text-lg mb-2">Рекомендовані PID</h4>
+                <div className="space-y-4">
+                  {/* Roll */}
+                  <div className="border-b pb-2">
+                    <p className="font-medium text-gray-700">Roll</p>
+                    <div className="grid grid-cols-4 gap-2 mt-1">
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">P</p>
+                        <p className="font-mono">{recommendations.pid.roll.p}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">I</p>
+                        <p className="font-mono">{recommendations.pid.roll.i}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">D</p>
+                        <p className="font-mono">{recommendations.pid.roll.d}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">F</p>
+                        <p className="font-mono">{recommendations.pid.roll.f}</p>
                       </div>
                     </div>
-                    
-                    {/* Pitch */}
-                    <div className="border-b pb-2">
-                      <p className="font-medium text-gray-700">Pitch</p>
-                      <div className="grid grid-cols-4 gap-2 mt-1">
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">P</p>
-                          <p className="font-mono">{recommendations.pid.pitch.p}</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">I</p>
-                          <p className="font-mono">{recommendations.pid.pitch.i}</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">D</p>
-                          <p className="font-mono">{recommendations.pid.pitch.d}</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">F</p>
-                          <p className="font-mono">{recommendations.pid.pitch.f}</p>
-                        </div>
+                  </div>
+                  
+                  {/* Pitch */}
+                  <div className="border-b pb-2">
+                    <p className="font-medium text-gray-700">Pitch</p>
+                    <div className="grid grid-cols-4 gap-2 mt-1">
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">P</p>
+                        <p className="font-mono">{recommendations.pid.pitch.p}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">I</p>
+                        <p className="font-mono">{recommendations.pid.pitch.i}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">D</p>
+                        <p className="font-mono">{recommendations.pid.pitch.d}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">F</p>
+                        <p className="font-mono">{recommendations.pid.pitch.f}</p>
                       </div>
                     </div>
-                    
-                    {/* Yaw */}
-                    <div className="border-b pb-2">
-                      <p className="font-medium text-gray-700">Yaw</p>
-                      <div className="grid grid-cols-4 gap-2 mt-1">
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">P</p>
-                          <p className="font-mono">{recommendations.pid.yaw.p}</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">I</p>
-                          <p className="font-mono">{recommendations.pid.yaw.i}</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">D</p>
-                          <p className="font-mono">{recommendations.pid.yaw.d}</p>
-                        </div>
-                        <div className="text-center">
-                          <p className="text-sm text-gray-500">F</p>
-                          <p className="font-mono">{recommendations.pid.yaw.f}</p>
-                        </div>
+                  </div>
+                  
+                  {/* Yaw */}
+                  <div className="border-b pb-2">
+                    <p className="font-medium text-gray-700">Yaw</p>
+                    <div className="grid grid-cols-4 gap-2 mt-1">
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">P</p>
+                        <p className="font-mono">{recommendations.pid.yaw.p}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">I</p>
+                        <p className="font-mono">{recommendations.pid.yaw.i}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">D</p>
+                        <p className="font-mono">{recommendations.pid.yaw.d}</p>
+                      </div>
+                      <div className="text-center">
+                        <p className="text-sm text-gray-500">F</p>
+                        <p className="font-mono">{recommendations.pid.yaw.f}</p>
                       </div>
                     </div>
                   </div>
                 </div>
-                
-                {/* Рекомендації для фільтрів */}
-                <div className="bg-gray-50 p-4 rounded-lg shadow">
-                  <h4 className="font-medium text-lg mb-2">Рекомендовані фільтри</h4>
-                  <div className="space-y-2">
+              </div>
+              
+              {/* Рекомендації для фільтрів */}
+              <div className="bg-gray-50 p-4 rounded-lg shadow">
+                <h4 className="font-medium text-lg mb-2">Рекомендовані фільтри</h4>
+                <div className="space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <p className="text-sm text-gray-500">Gyro Lowpass:</p>
+                      <p className="font-mono">{recommendations.filters.gyro_lowpass_hz} Гц</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">D-term Lowpass:</p>
+                      <p className="font-mono">{recommendations.filters.dterm_lowpass_hz} Гц</p>
+                    </div>
+                  </div>
+                  
+                  <div className="border-t pt-2 mt-2">
+                    <p className="font-medium text-gray-700 mb-1">Dynamic Notch фільтри</p>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <p className="text-sm text-gray-500">Gyro Lowpass:</p>
-                        <p className="font-mono">{recommendations.filters.gyro_lowpass_hz} Гц</p>
+                        <p className="text-sm text-gray-500">Кількість:</p>
+                        <p className="font-mono">{recommendations.filters.dyn_notch_count}</p>
                       </div>
                       <div>
-                        <p className="text-sm text-gray-500">D-term Lowpass:</p>
-                        <p className="font-mono">{recommendations.filters.dterm_lowpass_hz} Гц</p>
+                        <p className="text-sm text-gray-500">Q-фактор:</p>
+                        <p className="font-mono">{recommendations.filters.dyn_notch_q}</p>
                       </div>
-                    </div>
-                    
-                    <div className="border-t pt-2 mt-2">
-                      <p className="font-medium text-gray-700 mb-1">Dynamic Notch фільтри</p>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <p className="text-sm text-gray-500">Кількість:</p>
-                          <p className="font-mono">{recommendations.filters.dyn_notch_count}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-500">Q-фактор:</p>
-                          <p className="font-mono">{recommendations.filters.dyn_notch_q}</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-500">Мін. частота:</p>
-                          <p className="font-mono">{recommendations.filters.dyn_notch_min_hz} Гц</p>
-                        </div>
-                        <div>
-                          <p className="text-sm text-gray-500">Макс. частота:</p>
-                          <p className="font-mono">{recommendations.filters.dyn_notch_max_hz} Гц</p>
-                        </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Мін. частота:</p>
+                        <p className="font-mono">{recommendations.filters.dyn_notch_min_hz} Гц</p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-gray-500">Макс. частота:</p>
+                        <p className="font-mono">{recommendations.filters.dyn_notch_max_hz} Гц</p>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
-              
-              {/* Команди CLI для Betaflight */}
-              <div className="bg-gray-800 rounded-lg p-4 shadow text-white font-mono overflow-x-auto">
-                <h4 className="font-medium text-lg mb-2 text-gray-200">Команди CLI для Betaflight</h4>
-                <div className="whitespace-pre-wrap text-sm">
-                  {recommendations.betaflightCommands.join('\n')}
-                </div>
-                <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(recommendations.betaflightCommands.join('\n'))
-                      .then(() => alert('Команди скопійовано до буфера обміну!'))
-                      .catch(err => console.error('Помилка копіювання: ', err));
-                  }}
-                  className="mt-3 py-1 px-3 bg-blue-600 hover:bg-blue-700 rounded text-white text-sm"
-                >
-                  Копіювати команди
-                </button>
-              </div>
             </div>
-          )}
-        </>
-      )}
-    </div>
-  );
+            
+            {/* Команди CLI для Betaflight */}
+            <div className="bg-gray-800 rounded-lg p-4 shadow text-white font-mono overflow-x-auto">
+              <h4 className="font-medium text-lg mb-2 text-gray-200">Команди CLI для Betaflight</h4>
+              <div className="whitespace-pre-wrap text-sm">
+                {recommendations.betaflightCommands.join('\n')}
+              </div>
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(recommendations.betaflightCommands.join('\n'))
+                    .then(() => alert('Команди скопійовано до буфера обміну!'))
+                    .catch(err => console.error('Помилка копіювання: ', err));
+                }}
+                className="mt-3 py-1 px-3 bg-blue-600 hover:bg-blue-700 rounded text-white text-sm"
+              >
+                Копіювати команди
+              </button>
+            </div>
+          </div>
+        )}
+      </>
+    )}
+  </div>
+);
+
 };
 
 export default BlackboxAnalyzer;
