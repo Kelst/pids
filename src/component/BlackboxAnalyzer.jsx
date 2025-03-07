@@ -12,21 +12,26 @@ import {
 } from '../services/blackboxAnalysisService';
 
 const BlackboxAnalyzer = () => {
-  // Get data from store
+  // Отримуємо дані зі сховища
   const { 
     flightData, 
     metadata, 
     dataHeaders 
   } = useBlackboxStore();
 
-  // State for analysis
+  // Стан для аналізу
   const [analyzing, setAnalyzing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [analysisResults, setAnalysisResults] = useState(null);
   const [recommendations, setRecommendations] = useState(null);
   const [error, setError] = useState(null);
+  const [analysisStats, setAnalysisStats] = useState({
+    startTime: null,
+    processingTime: {},
+    memoryUsage: {}
+  });
 
-  // Data analysis function
+  // Функція аналізу даних
   const analyzeData = async () => {
     if (!flightData || flightData.length === 0) {
       setError("Немає даних для аналізу. Спочатку завантажте лог-файл.");
@@ -39,11 +44,19 @@ const BlackboxAnalyzer = () => {
       setError(null);
       setAnalysisResults(null);
       setRecommendations(null);
+      
+      // Фіксуємо час початку аналізу
+      const startTime = performance.now();
+      setAnalysisStats({
+        startTime,
+        processingTime: {},
+        memoryUsage: {}
+      });
 
-      // Check data size and log
-      console.log(`Starting analysis of ${flightData.length} data rows`);
+      // Виводимо інформацію про розмір даних
+      console.log(`Starting analysis of ${flightData.length} data rows (full dataset)`);
 
-      // All analysis steps with error handling for each step
+      // Всі кроки аналізу з обробкою помилок для кожного кроку
       const steps = [
         { name: 'Аналіз відхилень', func: () => analyzeErrorMetrics(flightData, dataHeaders), progress: 20 },
         { name: 'Аналіз швидкості реакції', func: () => analyzeStepResponse(flightData, dataHeaders, metadata), progress: 40 },
@@ -53,43 +66,93 @@ const BlackboxAnalyzer = () => {
       ];
 
       let results = {};
+      const processingTimes = {};
       
-      // Execute each analysis step sequentially
+      // Виконуємо кожен крок аналізу послідовно
       for (let i = 0; i < steps.length; i++) {
         const step = steps[i];
         setProgress(i > 0 ? steps[i-1].progress : 0);
-        console.log(`Executing step: ${step.name}`);
+        console.log(`Executing step: ${step.name} (using full dataset of ${flightData.length} points)`);
         
         try {
-          // Execute step with timeout for UI update
+          // Вимірюємо час виконання кроку
+          const stepStartTime = performance.now();
+          
+          // Виконуємо крок з очищенням пам'яті
           const stepResult = await step.func();
+          
+          // Зберігаємо результати та час виконання
           results = { ...results, ...stepResult };
+          const stepEndTime = performance.now();
+          processingTimes[step.name] = (stepEndTime - stepStartTime) / 1000; // в секундах
+          
+          // Оновлюємо статистику
+          setAnalysisStats(prev => ({
+            ...prev,
+            processingTime: {
+              ...prev.processingTime,
+              [step.name]: processingTimes[step.name]
+            }
+          }));
+          
           setProgress(step.progress);
           
-          // Short pause to let browser "breathe"
+          // Короткі паузи для UI під час тривалих обчислень
           await new Promise(resolve => setTimeout(resolve, 100));
+          
+          // Примусове очищення пам'яті
+          if (global.gc) {
+            global.gc();
+          }
         } catch (stepError) {
           console.error(`Error in step ${step.name}:`, stepError);
           setError(`Помилка у кроці ${step.name}: ${stepError.message}`);
-          // Continue with next step
+          // Продовжуємо з наступним кроком
         }
       }
 
-      // Set analysis results
+      // Встановлюємо результати аналізу
       setAnalysisResults(results);
 
-      // Generate recommendations based on analysis results
+      // Генеруємо рекомендації на основі результатів аналізу
       try {
-        console.log('Generating recommendations');
+        console.log('Generating recommendations based on full dataset analysis');
+        const recommendStartTime = performance.now();
         const generatedRecommendations = generateRecommendations(results, metadata);
+        const recommendEndTime = performance.now();
+        processingTimes['Recommendations'] = (recommendEndTime - recommendStartTime) / 1000;
+        
         setRecommendations(generatedRecommendations);
+        
+        // Оновлюємо статистику
+        setAnalysisStats(prev => ({
+          ...prev,
+          processingTime: {
+            ...prev.processingTime,
+            'Recommendations': processingTimes['Recommendations']
+          }
+        }));
       } catch (recError) {
         console.error("Error generating recommendations:", recError);
         setError(`Помилка генерації рекомендацій: ${recError.message}`);
       }
 
-      // Complete analysis
-      console.log('Analysis completed');
+      // Завершення аналізу
+      const endTime = performance.now();
+      const totalTime = (endTime - startTime) / 1000; // в секундах
+      
+      console.log(`Analysis of full dataset (${flightData.length} points) completed in ${totalTime.toFixed(2)} seconds`);
+      console.log('Processing times per step:', processingTimes);
+      
+      // Оновлюємо статистику
+      setAnalysisStats(prev => ({
+        ...prev,
+        processingTime: {
+          ...prev.processingTime,
+          'Total': totalTime
+        }
+      }));
+      
       setProgress(100);
       setTimeout(() => {
         setAnalyzing(false);
@@ -123,7 +186,7 @@ const BlackboxAnalyzer = () => {
         </div>
       ) : (
         <>
-          {/* Analysis button */}
+          {/* Кнопка аналізу */}
           <div className="mb-6">
             <button
               onClick={analyzeData}
@@ -137,11 +200,11 @@ const BlackboxAnalyzer = () => {
               {analyzing ? 'Аналіз...' : 'Запустити аналіз даних'}
             </button>
             <p className="mt-2 text-sm text-gray-600">
-              Аналіз може зайняти кілька секунд, залежно від обсягу даних.
+              Аналіз повного набору даних може зайняти до кількох хвилин, залежно від обсягу даних ({flightData.length.toLocaleString()} записів).
             </p>
           </div>
 
-          {/* Progress bar */}
+          {/* Індикатор прогресу */}
           {analyzing && (
             <div className="mb-6">
               <div className="w-full bg-gray-200 rounded-full h-4">
@@ -153,10 +216,24 @@ const BlackboxAnalyzer = () => {
               <p className="mt-1 text-sm text-gray-600 text-right">
                 {progress}% завершено
               </p>
+              
+              {/* Додаткова інформація про поточний крок */}
+              {Object.keys(analysisStats.processingTime).length > 0 && (
+                <div className="mt-2 p-2 bg-gray-50 rounded-md">
+                  <p className="text-xs text-gray-500">Тривалість кроків аналізу:</p>
+                  <div className="grid grid-cols-2 gap-2 mt-1">
+                    {Object.entries(analysisStats.processingTime).map(([step, time]) => (
+                      <div key={step} className="text-xs">
+                        <span className="font-medium">{step}:</span> {time.toFixed(2)}s
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
-          {/* Error message */}
+          {/* Повідомлення про помилку */}
           {error && (
             <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-6">
               <div className="flex">
@@ -172,11 +249,22 @@ const BlackboxAnalyzer = () => {
             </div>
           )}
 
-          {/* Analysis Results */}
+          {/* Результати аналізу */}
           {analysisResults && <AnalysisResults analysisResults={analysisResults} />}
 
-          {/* Recommendations */}
+          {/* Рекомендації */}
           {recommendations && <RecommendationPanel recommendations={recommendations} />}
+          
+          {/* Інформація про аналіз */}
+          {analysisResults && analysisStats.processingTime.Total && (
+            <div className="mt-6 p-3 bg-gray-50 rounded-md">
+              <h4 className="text-sm font-semibold text-gray-700">Інформація про аналіз</h4>
+              <p className="text-xs text-gray-600">
+                Проаналізовано {flightData.length.toLocaleString()} записів. 
+                Загальний час аналізу: {analysisStats.processingTime.Total.toFixed(2)} секунд.
+              </p>
+            </div>
+          )}
         </>
       )}
     </div>
