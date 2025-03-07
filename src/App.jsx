@@ -1,5 +1,5 @@
-import React from 'react'
-import { useState } from 'react'
+import React, { useState, useEffect } from 'react';
+
 import BlackboxLogViewer from './component/BlackboxLogViewer'
 import BlackboxSummary from './component/BlackboxSummary'
 import BlackboxAnalyzer from './component/BlackboxAnalyzer'

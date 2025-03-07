@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import useBlackboxStore from '../store/blackboxStore';
 import AnalysisResults from './AnalysisResults';
 import RecommendationPanel from './RecommendationPanel';
+import SettingsSimulator from './SettingsSimulator'; // Додайте цей рядок
+
 import { 
   analyzeErrorMetrics, 
   analyzeStepResponse, 
@@ -295,7 +297,41 @@ const BlackboxAnalyzer = () => {
 
           {/* Рекомендації */}
           {recommendations && <RecommendationPanel recommendations={recommendations} />}
-          
+          {/* Додайте SettingsSimulator тут */}
+{recommendations && (
+  <SettingsSimulator 
+    currentSettings={{
+      pid: {
+        roll: { 
+          p: parseInt(metadata.rollPID?.split(',')[0]) || 0, 
+          i: parseInt(metadata.rollPID?.split(',')[1]) || 0, 
+          d: parseInt(metadata.rollPID?.split(',')[2]) || 0,
+          f: parseInt(metadata.rollPID?.split(',')[3]) || 0
+        },
+        pitch: { 
+          p: parseInt(metadata.pitchPID?.split(',')[0]) || 0, 
+          i: parseInt(metadata.pitchPID?.split(',')[1]) || 0, 
+          d: parseInt(metadata.pitchPID?.split(',')[2]) || 0,
+          f: parseInt(metadata.pitchPID?.split(',')[3]) || 0
+        },
+        yaw: { 
+          p: parseInt(metadata.yawPID?.split(',')[0]) || 0, 
+          i: parseInt(metadata.yawPID?.split(',')[1]) || 0, 
+          d: parseInt(metadata.yawPID?.split(',')[2]) || 0,
+          f: parseInt(metadata.yawPID?.split(',')[3]) || 0
+        }
+      },
+      filters: {
+        gyro_lowpass_hz: parseInt(metadata.gyro_lowpass_hz) || 0,
+        dterm_lowpass_hz: parseInt(metadata.dterm_lowpass_hz) || 0,
+        dyn_notch_count: parseInt(metadata.dyn_notch_count) || 0,
+        dyn_notch_q: parseInt(metadata.dyn_notch_q) || 0
+      }
+    }}
+    recommendations={recommendations}
+    metadata={metadata}
+  />
+)}
           {/* Інформація про аналіз */}
           {analysisResults && analysisStats.processingTime.Total && (
             <div className="mt-6 p-3 bg-gray-50 rounded-md">
