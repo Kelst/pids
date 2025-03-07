@@ -2050,501 +2050,551 @@ export const analyzeFilters = async (flightData, dataHeaders, metadata) => {
  * @param {Object} metadata - Metadata with current settings
  * @returns {Object} - Recommendations for PID, filters, and CLI commands
  */
-export const generateRecommendations = (analysisResults, metadata) => {
-  if (!analysisResults) return null;
-  
-  const recommendations = {
-    pid: {
-      roll: { p: 0, i: 0, d: 0, f: 0 },
-      pitch: { p: 0, i: 0, d: 0, f: 0 },
-      yaw: { p: 0, i: 0, d: 0, f: 0 }
-    },
-    filters: {
-      gyro_lowpass_hz: 0,
-      dterm_lowpass_hz: 0,
-      dyn_notch_count: 0,
-      dyn_notch_q: 0,
-      dyn_notch_min_hz: 0,
-      dyn_notch_max_hz: 0,
-      // Add ability for different Q-factors
-      dynamic_notch_q_factors: []
-    },
-    betaflightCommands: [],
-    // Add detailed explanations for recommendations
-    explanations: {
-      pid: {},
-      filters: {},
-      interactions: {}
+// Додамо до функції generateRecommendations новий режим для відеозйомки
+
+export const generateRecommendations = (analysisResults, metadata, mode = 'standard') => {
+    if (!analysisResults) return null;
+    
+    const recommendations = {
+      pid: {
+        roll: { p: 0, i: 0, d: 0, f: 0 },
+        pitch: { p: 0, i: 0, d: 0, f: 0 },
+        yaw: { p: 0, i: 0, d: 0, f: 0 }
+      },
+      filters: {
+        gyro_lowpass_hz: 0,
+        dterm_lowpass_hz: 0,
+        dyn_notch_count: 0,
+        dyn_notch_q: 0,
+        dyn_notch_min_hz: 0,
+        dyn_notch_max_hz: 0,
+        dynamic_notch_q_factors: []
+      },
+      additionalParams: {
+        rc_expo: { roll: 0, pitch: 0, yaw: 0 },
+        rc_rate: { roll: 0, pitch: 0, yaw: 0 },
+        tpa_rate: 0,
+        tpa_breakpoint: 0,
+        anti_gravity_gain: 0,
+        feed_forward_transition: 0,
+        dyn_idle_min_rpm: 0
+      },
+      betaflightCommands: [],
+      explanations: {
+        pid: {},
+        filters: {},
+        interactions: {},
+        mode: {}
+      }
+    };
+    
+    try {
+      // Get current PID settings from metadata
+      const currentPid = {
+        roll: { p: 0, i: 0, d: 0, f: 0 },
+        pitch: { p: 0, i: 0, d: 0, f: 0 },
+        yaw: { p: 0, i: 0, d: 0, f: 0 }
+      };
+      
+      // Parse current PIDs from metadata
+      if (metadata.rollPID) {
+        const parts = metadata.rollPID.split(',').map(p => parseInt(p.trim()));
+        if (parts.length >= 3) {
+          currentPid.roll.p = parts[0];
+          currentPid.roll.i = parts[1];
+          currentPid.roll.d = parts[2];
+          if (parts.length >= 4) {
+            currentPid.roll.f = parts[3];
+          }
+        }
+      }
+      
+      if (metadata.pitchPID) {
+        const parts = metadata.pitchPID.split(',').map(p => parseInt(p.trim()));
+        if (parts.length >= 3) {
+          currentPid.pitch.p = parts[0];
+          currentPid.pitch.i = parts[1];
+          currentPid.pitch.d = parts[2];
+          if (parts.length >= 4) {
+            currentPid.pitch.f = parts[3];
+          }
+        }
+      }
+      
+      if (metadata.yawPID) {
+        const parts = metadata.yawPID.split(',').map(p => parseInt(p.trim()));
+        if (parts.length >= 3) {
+          currentPid.yaw.p = parts[0];
+          currentPid.yaw.i = parts[1];
+          currentPid.yaw.d = parts[2];
+          if (parts.length >= 4) {
+            currentPid.yaw.f = parts[3];
+          }
+        }
+      }
+      
+      // Отримуємо поточні додаткові параметри
+      const currentRcExpo = {
+        roll: parseFloat(metadata.rc_expo) || 0.0,
+        pitch: parseFloat(metadata.rc_expo) || 0.0,
+        yaw: parseFloat(metadata.rc_expo) || 0.0
+      };
+      
+      const currentRcRate = {
+        roll: parseFloat(metadata.rc_rate) || 1.0,
+        pitch: parseFloat(metadata.rc_rate) || 1.0,
+        yaw: parseFloat(metadata.rc_rate) || 1.0
+      };
+      
+      const currentTpaRate = parseFloat(metadata.tpa_rate) || 0.0;
+      const currentTpaBreakpoint = parseInt(metadata.tpa_breakpoint) || 1500;
+      const currentAntiGravityGain = parseInt(metadata.anti_gravity_gain) || 0;
+      const currentFeedForwardTransition = parseFloat(metadata.feed_forward_transition) || 0.0;
+      const currentDynIdleMinRpm = parseInt(metadata.dyn_idle_min_rpm) || 0;
+      
+      // Get current filter settings
+      const currentFilters = {
+        gyro_lowpass_hz: parseInt(metadata.gyro_lowpass_hz) || 0,
+        dterm_lowpass_hz: parseInt(metadata.dterm_lowpass_hz) || 0,
+        dyn_notch_count: parseInt(metadata.dyn_notch_count) || 0,
+        dyn_notch_q: parseInt(metadata.dyn_notch_q) || 0,
+        dyn_notch_min_hz: parseInt(metadata.dyn_notch_min_hz) || 0,
+        dyn_notch_max_hz: parseInt(metadata.dyn_notch_max_hz) || 0
+      };
+      
+      // ***********************************
+      // Аналіз і стандартні рекомендації PID
+      // ***********************************
+      
+      // 1. Basic error analysis and recommendations for PID
+      if (analysisResults.errorMetrics) {
+        for (const axis of ['roll', 'pitch', 'yaw']) {
+          if (analysisResults.errorMetrics[axis]) {
+            const {rmsError, maxError, meanError} = analysisResults.errorMetrics[axis];
+            
+            // P-term recommendations
+            if (rmsError > 20) {
+              // If large error, increase P
+              recommendations.pid[axis].p = Math.round(currentPid[axis].p * 1.1);
+            } else if (rmsError < 5) {
+              // If small error, decrease P
+              recommendations.pid[axis].p = Math.round(currentPid[axis].p * 0.95);
+            } else {
+              // Leave unchanged
+              recommendations.pid[axis].p = currentPid[axis].p;
+            }
+            
+            // Add explanation
+            recommendations.explanations.pid[`${axis}_p`] = 
+              `P term ${recommendations.pid[axis].p > currentPid[axis].p ? 'increased' : 'decreased'} based on ` +
+              `RMS error (${rmsError.toFixed(2)}).`;
+            
+            // I-term recommendations
+            if (meanError > 10) {
+              // If large mean error, increase I
+              recommendations.pid[axis].i = Math.round(currentPid[axis].i * 1.15);
+            } else {
+              // Leave unchanged
+              recommendations.pid[axis].i = currentPid[axis].i;
+            }
+            
+            // Add explanation
+            if (meanError > 10) {
+              recommendations.explanations.pid[`${axis}_i`] = 
+                `I term increased due to high mean error (${meanError.toFixed(2)}).`;
+            }
+            
+            // F-term recommendations
+            recommendations.pid[axis].f = currentPid[axis].f;
+          }
+        }
+      }
+      
+      // 2. D-term recommendations based on damping analysis
+      if (analysisResults.stepResponseMetrics) {
+        for (const axis of ['roll', 'pitch', 'yaw']) {
+          if (analysisResults.stepResponseMetrics[axis]) {
+            const stepResponse = analysisResults.stepResponseMetrics[axis];
+            const { overshoot, settlingTime, riseTime, dampingRatio, oscillationFreq, decayRate } = stepResponse;
+            
+            // Standard recommendations calculation (existing logic)
+            const optimalDampingRatio = 0.65;
+            let dCorrection = 1.0;
+            
+            if (dampingRatio > 0) {
+              if (dampingRatio < optimalDampingRatio - 0.15) {
+                dCorrection *= 1.15 + (0.05 * ((optimalDampingRatio - dampingRatio) / 0.15));
+                recommendations.explanations.pid[`${axis}_d_damping`] = 
+                  `D term increased due to insufficient damping (${dampingRatio.toFixed(2)}).`;
+              } else if (dampingRatio > optimalDampingRatio + 0.15) {
+                dCorrection *= 0.9 - (0.05 * ((dampingRatio - optimalDampingRatio) / 0.15));
+                recommendations.explanations.pid[`${axis}_d_damping`] = 
+                  `D term decreased due to excessive damping (${dampingRatio.toFixed(2)}).`;
+              }
+            }
+            
+            if (decayRate > 0) {
+              const optimalDecayRate = 50;
+              if (decayRate < optimalDecayRate * 0.7) {
+                dCorrection *= 1.1;
+                recommendations.explanations.pid[`${axis}_d_decay`] = 
+                  `D term increased due to slow oscillation decay (${decayRate.toFixed(1)}%/period).`;
+              } else if (decayRate > optimalDecayRate * 1.5) {
+                dCorrection *= 0.95;
+                recommendations.explanations.pid[`${axis}_d_decay`] = 
+                  `D term decreased due to too fast decay (${decayRate.toFixed(1)}%/period).`;
+              }
+            }
+            
+            if (overshoot > 25) {
+              dCorrection *= 1.05;
+              recommendations.explanations.pid[`${axis}_d_overshoot`] = 
+                `D term increased due to high overshoot (${overshoot.toFixed(1)}%).`;
+            } else if (overshoot < 5) {
+              dCorrection *= 0.95;
+              recommendations.explanations.pid[`${axis}_d_overshoot`] = 
+                `D term decreased due to low overshoot (${overshoot.toFixed(1)}%).`;
+            }
+            
+            if (oscillationFreq > 0) {
+              if (oscillationFreq > 30) {
+                dCorrection *= 0.95;
+                recommendations.explanations.pid[`${axis}_d_freq`] = 
+                  `D term decreased due to high frequency oscillations (${oscillationFreq.toFixed(1)} Hz).`;
+              }
+            }
+            
+            dCorrection = Math.max(0.8, Math.min(dCorrection, 1.3));
+            recommendations.pid[axis].d = Math.round(currentPid[axis].d * dCorrection);
+            
+            recommendations.explanations.pid[`${axis}_d_summary`] = 
+              `D term ${recommendations.pid[axis].d > currentPid[axis].d ? 'increased' : 'decreased'} to ${recommendations.pid[axis].d} ` +
+              `(was ${currentPid[axis].d}) based on damping analysis: ` +
+              `damping ratio=${dampingRatio ? dampingRatio.toFixed(2) : 'n/a'}, ` +
+              `decay rate=${decayRate ? decayRate.toFixed(1) : 'n/a'}%/period, ` +
+              `frequency=${oscillationFreq ? oscillationFreq.toFixed(1) : 'n/a'} Hz`;
+          }
+        }
+      }
+      
+      // ***********************************
+      // Спеціальний режим для відеозйомки
+      // ***********************************
+      if (mode === 'cinematic') {
+        recommendations.explanations.mode.cinematic = 
+          `Cinematic mode активовано: налаштування оптимізовані для плавної зйомки, ` + 
+          `зменшення вібрацій та запобігання перегріву моторів.`;
+          
+        // Модифікуємо рекомендовані PID для більшої плавності
+        for (const axis of ['roll', 'pitch', 'yaw']) {
+          // Зменшуємо P-термін для плавності
+          recommendations.pid[axis].p = Math.round(recommendations.pid[axis].p * 0.85);
+          
+          // Збільшуємо I-термін для кращого утримання позиції
+          recommendations.pid[axis].i = Math.round(recommendations.pid[axis].i * 1.1);
+          
+          // Для Yaw використовуємо особливі налаштування
+          if (axis === 'yaw') {
+            recommendations.pid[axis].p = Math.round(recommendations.pid[axis].p * 0.9); // Менший P для Yaw
+            recommendations.pid[axis].i = Math.round(recommendations.pid[axis].i * 1.15); // Більший I для Yaw
+            recommendations.pid[axis].d = Math.max(0, Math.round(recommendations.pid[axis].d * 0.5)); // Мінімальний D для Yaw
+          } else {
+            // Для Roll і Pitch збільшуємо D для гасіння вібрацій
+            recommendations.pid[axis].d = Math.round(recommendations.pid[axis].d * 1.08);
+          }
+          
+          // Зменшуємо Feed Forward для плавного початку і закінчення руху
+          recommendations.pid[axis].f = Math.round((currentPid[axis].f || 100) * 0.7);
+        }
+        
+        // Збалансувати D-терміни для roll і pitch
+        const avgD = Math.round((recommendations.pid.roll.d + recommendations.pid.pitch.d) / 2);
+        recommendations.pid.roll.d = avgD;
+        recommendations.pid.pitch.d = avgD;
+        
+        // Оптимізуємо фільтри для відеозйомки (зменшення шуму та вібрацій)
+        recommendations.filters.gyro_lowpass_hz = Math.max(120, currentFilters.gyro_lowpass_hz);
+        recommendations.filters.dterm_lowpass_hz = Math.min(80, currentFilters.dterm_lowpass_hz);
+        
+        // Збільшуємо кількість Notch-фільтрів для боротьби з вібраціями
+        recommendations.filters.dyn_notch_count = Math.max(4, currentFilters.dyn_notch_count);
+        
+        // Рекомендовані додаткові параметри для плавного польоту
+        recommendations.additionalParams = {
+          rc_expo: {
+            roll: Math.max(0.35, currentRcExpo.roll),
+            pitch: Math.max(0.35, currentRcExpo.pitch),
+            yaw: Math.max(0.35, currentRcExpo.yaw)
+          },
+          rc_rate: {
+            roll: Math.min(0.9, currentRcRate.roll),
+            pitch: Math.min(0.9, currentRcRate.pitch),
+            yaw: Math.min(0.9, currentRcRate.yaw)
+          },
+          tpa_rate: Math.max(0.5, currentTpaRate),
+          tpa_breakpoint: Math.min(1550, currentTpaBreakpoint),
+          anti_gravity_gain: Math.max(220, currentAntiGravityGain),
+          feed_forward_transition: Math.max(0.7, currentFeedForwardTransition),
+          dyn_idle_min_rpm: currentDynIdleMinRpm > 0 ? currentDynIdleMinRpm : 25 // Активуємо Dynamic Idle
+        };
+        
+        // Додаємо пояснення щодо налаштувань для відеозйомки
+        recommendations.explanations.mode.pid_changes = 
+          `Налаштування PID модифіковані для режиму відеозйомки: ` +
+          `P-терміни зменшені для плавності, ` +
+          `I-терміни збільшені для стабільності, ` +
+          `D-терміни оптимізовані для зменшення вібрацій, ` +
+          `Feed Forward зменшений для плавних переходів.`;
+          
+        recommendations.explanations.mode.filter_changes = 
+          `Фільтри оптимізовані для режиму відеозйомки: ` +
+          `Gyro lowpass підвищений до ${recommendations.filters.gyro_lowpass_hz} Hz для зменшення шуму, ` +
+          `D-term lowpass знижений до ${recommendations.filters.dterm_lowpass_hz} Hz для плавності, ` +
+          `Кількість Notch-фільтрів збільшена до ${recommendations.filters.dyn_notch_count} для боротьби з вібраціями.`;
+          
+        recommendations.explanations.mode.additional_changes = 
+          `Додаткові параметри оптимізовані для плавної зйомки: ` +
+          `RC Expo збільшено для плавнішого керування, ` +
+          `RC Rate зменшено для більш м'яких рухів, ` +
+          `TPA налаштовано для запобігання перегріву моторів, ` +
+          `Anti-gravity gain збільшено для стабільності під час змін газу, ` +
+          `Feed Forward Transition збільшено для точнішого керування.`;
+      }
+      
+      // 3. Harmonic analysis and further PID corrections (existing code)
+      if (analysisResults.harmonicAnalysis) {
+        for (const axis of ['roll', 'pitch', 'yaw']) {
+          if (analysisResults.harmonicAnalysis[axis]) {
+            const {thd, oscillationDetected} = analysisResults.harmonicAnalysis[axis];
+            
+            if (oscillationDetected && mode !== 'cinematic') { // Не застосовуємо для cinematic mode, де ми вже зробили оптимізацію
+              const currentP = recommendations.pid[axis].p;
+              const currentD = recommendations.pid[axis].d;
+              
+              recommendations.pid[axis].p = Math.round(currentP * 0.92);
+              recommendations.pid[axis].d = Math.round(currentD * 0.92);
+              
+              recommendations.explanations.pid[`${axis}_oscillation`] = 
+                `P and D terms reduced due to detected unwanted oscillations (THD=${thd.toFixed(1)}%).`;
+            }
+            
+            if (thd > 40 && mode !== 'cinematic') {
+              const currentP = recommendations.pid[axis].p;
+              recommendations.pid[axis].p = Math.round(currentP * 0.95);
+              
+              recommendations.explanations.pid[`${axis}_thd`] = 
+                `P term reduced due to high harmonic distortion (THD=${thd.toFixed(1)}%).`;
+            }
+          }
+        }
+      }
+      
+      // 4. Filter recommendations (існуючий код з доповненнями для режиму кінозйомки)
+      if (analysisResults.filterAnalysis) {
+        // Gyro filters
+        if (analysisResults.filterAnalysis.gyroFilters && mode !== 'cinematic') {
+          const {recommendedFrequency, effectiveness} = analysisResults.filterAnalysis.gyroFilters;
+          
+          if (recommendedFrequency > 0) {
+            recommendations.filters.gyro_lowpass_hz = recommendedFrequency;
+            
+            recommendations.explanations.filters.gyro_lowpass = 
+              `Gyro filter frequency recommended ${recommendedFrequency} Hz ` +
+              `(was ${currentFilters.gyro_lowpass_hz} Hz).`;
+          } else {
+            recommendations.filters.gyro_lowpass_hz = currentFilters.gyro_lowpass_hz;
+          }
+        }
+        
+        // D-term filters
+        if (analysisResults.filterAnalysis.dtermFilters && mode !== 'cinematic') {
+          const {recommendedFrequency} = analysisResults.filterAnalysis.dtermFilters;
+          
+          if (recommendedFrequency > 0) {
+            recommendations.filters.dterm_lowpass_hz = recommendedFrequency;
+            
+            recommendations.explanations.filters.dterm_lowpass = 
+              `D-term filter frequency recommended ${recommendedFrequency} Hz ` +
+              `(was ${currentFilters.dterm_lowpass_hz} Hz).`;
+          } else {
+            recommendations.filters.dterm_lowpass_hz = currentFilters.dterm_lowpass_hz;
+          }
+        }
+        
+        // Notch filters with adaptive Q-factor
+        if (analysisResults.filterAnalysis.notchFilters) {
+          const { identifiedNoiseFrequencies, classifiedNoises, recommendedQFactors } = 
+            analysisResults.filterAnalysis.notchFilters;
+          
+          if (identifiedNoiseFrequencies.length > 0) {
+            // Find minimum and maximum noise frequencies
+            const minFreq = Math.floor(Math.max(10, identifiedNoiseFrequencies.reduce(
+              (min, noise) => Math.min(min, noise.frequency), 1000
+            )));
+            
+            const maxFreq = Math.ceil(Math.min(500, identifiedNoiseFrequencies.reduce(
+              (max, noise) => Math.max(max, noise.frequency), 0
+            )));
+            
+            // Recommend range for notch filters
+            recommendations.filters.dyn_notch_min_hz = minFreq;
+            recommendations.filters.dyn_notch_max_hz = maxFreq;
+            
+            // У режимі відеозйомки розширюємо діапазон трохи більше
+            if (mode === 'cinematic') {
+              recommendations.filters.dyn_notch_min_hz = Math.max(5, Math.floor(minFreq * 0.9));
+              recommendations.filters.dyn_notch_max_hz = Math.min(500, Math.ceil(maxFreq * 1.1));
+            }
+            
+            // Recommend number of notch filters based on detected noises
+            recommendations.filters.dyn_notch_count = Math.min(5, Math.max(3, identifiedNoiseFrequencies.length));
+            
+            // Рекомендуємо більше фільтрів для режиму відеозйомки
+            if (mode === 'cinematic') {
+              recommendations.filters.dyn_notch_count = Math.min(5, recommendations.filters.dyn_notch_count + 1);
+            }
+            
+            // Recommend adaptive Q-factors if classification available
+            if (classifiedNoises && classifiedNoises.length > 0) {
+              // Select top-N noises for filtering
+              const topNoises = classifiedNoises
+                .sort((a, b) => b.magnitude - a.magnitude)
+                .slice(0, recommendations.filters.dyn_notch_count);
+              
+              // Form array of recommended Q-factors for each noise
+              recommendations.filters.dynamic_notch_q_factors = topNoises.map(noise => ({
+                frequency: noise.frequency,
+                q_factor: mode === 'cinematic' 
+                  ? Math.max(noise.recommendedQ, 150) // Мінімальний Q-фактор для кінозйомки
+                  : noise.recommendedQ,
+                noise_class: noise.noiseClass
+              }));
+              
+              // Average Q-factor for compatibility
+              recommendations.filters.dyn_notch_q = recommendedQFactors
+                ? recommendedQFactors.average
+                : 250;
+              
+              // Для режиму відеозйомки виставляємо Q-фактор, що забезпечує ширший фільтр
+              if (mode === 'cinematic') {
+                recommendations.filters.dyn_notch_q = Math.min(recommendedQFactors ? 
+                  recommendedQFactors.average : 250, 200);
+              }
+              
+              // Add explanation for adaptive Q-factors
+              recommendations.explanations.filters.notch_q_factors = 
+                `Adaptive Q-factors for different noise types: ` +
+                topNoises.map(noise => 
+                  `${noise.frequency.toFixed(1)} Hz: Q=${mode === 'cinematic' 
+                    ? Math.max(noise.recommendedQ, 150) 
+                    : noise.recommendedQ} (${noise.noiseClass})`
+                ).join(', ');
+            } else {
+              // Standard Q-factor
+              recommendations.filters.dyn_notch_q = mode === 'cinematic' ? 200 : 250;
+            }
+            
+            // Add general explanation for notch filters
+            recommendations.explanations.filters.notch = 
+              `Notch filters: count=${recommendations.filters.dyn_notch_count}, ` +
+              `range=${recommendations.filters.dyn_notch_min_hz}-${recommendations.filters.dyn_notch_max_hz} Hz, ` +
+              `average Q=${recommendations.filters.dyn_notch_q}.`;
+            
+          } else {
+            // Use current settings if no noises detected
+            recommendations.filters.dyn_notch_min_hz = currentFilters.dyn_notch_min_hz;
+            recommendations.filters.dyn_notch_max_hz = currentFilters.dyn_notch_max_hz;
+            recommendations.filters.dyn_notch_count = currentFilters.dyn_notch_count;
+            recommendations.filters.dyn_notch_q = currentFilters.dyn_notch_q;
+          }
+        }
+      }
+      
+      // Generate CLI commands for Betaflight (existing code plus cinematic mode additions)
+      const commands = [];
+      
+      // PID commands
+      commands.push('# PID settings');
+      commands.push(`set p_roll = ${recommendations.pid.roll.p}`);
+      commands.push(`set i_roll = ${recommendations.pid.roll.i}`);
+      commands.push(`set d_roll = ${recommendations.pid.roll.d}`);
+      
+      commands.push(`set p_pitch = ${recommendations.pid.pitch.p}`);
+      commands.push(`set i_pitch = ${recommendations.pid.pitch.i}`);
+      commands.push(`set d_pitch = ${recommendations.pid.pitch.d}`);
+      
+      commands.push(`set p_yaw = ${recommendations.pid.yaw.p}`);
+      commands.push(`set i_yaw = ${recommendations.pid.yaw.i}`);
+      commands.push(`set d_yaw = ${recommendations.pid.yaw.d}`);
+      
+      if (recommendations.pid.roll.f) {
+        commands.push(`set f_roll = ${recommendations.pid.roll.f}`);
+      }
+      if (recommendations.pid.pitch.f) {
+        commands.push(`set f_pitch = ${recommendations.pid.pitch.f}`);
+      }
+      if (recommendations.pid.yaw.f) {
+        commands.push(`set f_yaw = ${recommendations.pid.yaw.f}`);
+      }
+      
+      // Filter commands
+      commands.push('# Filter settings');
+      commands.push(`set gyro_lowpass_hz = ${recommendations.filters.gyro_lowpass_hz}`);
+      commands.push(`set dterm_lowpass_hz = ${recommendations.filters.dterm_lowpass_hz}`);
+      commands.push(`set dyn_notch_count = ${recommendations.filters.dyn_notch_count}`);
+      commands.push(`set dyn_notch_q = ${recommendations.filters.dyn_notch_q}`);
+      commands.push(`set dyn_notch_min_hz = ${recommendations.filters.dyn_notch_min_hz}`);
+      commands.push(`set dyn_notch_max_hz = ${recommendations.filters.dyn_notch_max_hz}`);
+      
+      // Additional commands for Betaflight 4.3+ with different Q-factor support
+      if (recommendations.filters.dynamic_notch_q_factors && 
+          recommendations.filters.dynamic_notch_q_factors.length > 0) {
+        commands.push('# Additional commands for Betaflight 4.3+ (individual Q-factors)');
+        for (let i = 0; i < Math.min(recommendations.filters.dyn_notch_count, 
+                                  recommendations.filters.dynamic_notch_q_factors.length); i++) {
+          const qFactor = recommendations.filters.dynamic_notch_q_factors[i];
+          commands.push(`set dyn_notch_q_${i+1} = ${qFactor.q_factor} # For frequency ~${qFactor.frequency.toFixed(1)} Hz`);
+        }
+      }
+      
+      // Додаємо команди для cinematic mode
+      if (mode === 'cinematic') {
+        commands.push('# Cinematic mode specific settings');
+        
+        // RC Expo settings
+        commands.push(`set rc_expo = ${recommendations.additionalParams.rc_expo.roll}`);
+        commands.push(`set rc_expo_roll = ${recommendations.additionalParams.rc_expo.roll}`);
+        commands.push(`set rc_expo_pitch = ${recommendations.additionalParams.rc_expo.pitch}`);
+        commands.push(`set rc_expo_yaw = ${recommendations.additionalParams.rc_expo.yaw}`);
+        
+        // RC Rate settings
+        commands.push(`set rc_rate = ${recommendations.additionalParams.rc_rate.roll}`);
+        commands.push(`set rc_rate_roll = ${recommendations.additionalParams.rc_rate.roll}`);
+        commands.push(`set rc_rate_pitch = ${recommendations.additionalParams.rc_rate.pitch}`);
+        commands.push(`set rc_rate_yaw = ${recommendations.additionalParams.rc_rate.yaw}`);
+        
+        // TPA і інші параметри
+        commands.push(`set tpa_rate = ${recommendations.additionalParams.tpa_rate}`);
+        commands.push(`set tpa_breakpoint = ${recommendations.additionalParams.tpa_breakpoint}`);
+        commands.push(`set anti_gravity_gain = ${recommendations.additionalParams.anti_gravity_gain}`);
+        commands.push(`set ff_transition = ${recommendations.additionalParams.feed_forward_transition}`);
+        
+        // Dynamic Idle
+        if (recommendations.additionalParams.dyn_idle_min_rpm > 0) {
+          commands.push(`set dyn_idle_min_rpm = ${recommendations.additionalParams.dyn_idle_min_rpm}`);
+          commands.push('set dyn_idle_p_gain = 50');
+          commands.push('set dyn_idle_i_gain = 50');
+          commands.push('set dyn_idle_d_gain = 50');
+        }
+      }
+      
+      // Save settings
+      commands.push('save');
+      
+      recommendations.betaflightCommands = commands;
+    } catch (err) {
+      console.error("Error generating improved recommendations:", err);
     }
+    
+    return recommendations;
   };
-  
-  try {
-    // Get current PID settings from metadata
-    const currentPid = {
-      roll: { p: 0, i: 0, d: 0, f: 0 },
-      pitch: { p: 0, i: 0, d: 0, f: 0 },
-      yaw: { p: 0, i: 0, d: 0, f: 0 }
-    };
-    
-    // Parse current PIDs from metadata
-    if (metadata.rollPID) {
-      const parts = metadata.rollPID.split(',').map(p => parseInt(p.trim()));
-      if (parts.length >= 3) {
-        currentPid.roll.p = parts[0];
-        currentPid.roll.i = parts[1];
-        currentPid.roll.d = parts[2];
-        if (parts.length >= 4) {
-          currentPid.roll.f = parts[3];
-        }
-      }
-    }
-    
-    if (metadata.pitchPID) {
-      const parts = metadata.pitchPID.split(',').map(p => parseInt(p.trim()));
-      if (parts.length >= 3) {
-        currentPid.pitch.p = parts[0];
-        currentPid.pitch.i = parts[1];
-        currentPid.pitch.d = parts[2];
-        if (parts.length >= 4) {
-          currentPid.pitch.f = parts[3];
-        }
-      }
-    }
-    
-    if (metadata.yawPID) {
-      const parts = metadata.yawPID.split(',').map(p => parseInt(p.trim()));
-      if (parts.length >= 3) {
-        currentPid.yaw.p = parts[0];
-        currentPid.yaw.i = parts[1];
-        currentPid.yaw.d = parts[2];
-        if (parts.length >= 4) {
-          currentPid.yaw.f = parts[3];
-        }
-      }
-    }
-    
-    // Get current filter settings
-    const currentFilters = {
-      gyro_lowpass_hz: parseInt(metadata.gyro_lowpass_hz) || 0,
-      dterm_lowpass_hz: parseInt(metadata.dterm_lowpass_hz) || 0,
-      dyn_notch_count: parseInt(metadata.dyn_notch_count) || 0,
-      dyn_notch_q: parseInt(metadata.dyn_notch_q) || 0,
-      dyn_notch_min_hz: parseInt(metadata.dyn_notch_min_hz) || 0,
-      dyn_notch_max_hz: parseInt(metadata.dyn_notch_max_hz) || 0
-    };
-    
-    // 1. Basic error analysis and recommendations for PID
-    if (analysisResults.errorMetrics) {
-      for (const axis of ['roll', 'pitch', 'yaw']) {
-        if (analysisResults.errorMetrics[axis]) {
-          const {rmsError, maxError, meanError} = analysisResults.errorMetrics[axis];
-          
-          // P-term recommendations
-          if (rmsError > 20) {
-            // If large error, increase P
-            recommendations.pid[axis].p = Math.round(currentPid[axis].p * 1.1);
-          } else if (rmsError < 5) {
-            // If small error, decrease P
-            recommendations.pid[axis].p = Math.round(currentPid[axis].p * 0.95);
-          } else {
-            // Leave unchanged
-            recommendations.pid[axis].p = currentPid[axis].p;
-          }
-          
-          // Add explanation
-          recommendations.explanations.pid[`${axis}_p`] = 
-            `P term ${recommendations.pid[axis].p > currentPid[axis].p ? 'increased' : 'decreased'} based on ` +
-            `RMS error (${rmsError.toFixed(2)}).`;
-          
-          // I-term recommendations
-          if (meanError > 10) {
-            // If large mean error, increase I
-            recommendations.pid[axis].i = Math.round(currentPid[axis].i * 1.15);
-          } else {
-            // Leave unchanged
-            recommendations.pid[axis].i = currentPid[axis].i;
-          }
-          
-          // Add explanation
-          if (meanError > 10) {
-            recommendations.explanations.pid[`${axis}_i`] = 
-              `I term increased due to high mean error (${meanError.toFixed(2)}).`;
-          }
-          
-          // F-term recommendations
-          recommendations.pid[axis].f = currentPid[axis].f;
-        }
-      }
-    }
-    
-    // 2. D-term recommendations based on damping analysis
-    if (analysisResults.stepResponseMetrics) {
-      for (const axis of ['roll', 'pitch', 'yaw']) {
-        if (analysisResults.stepResponseMetrics[axis]) {
-          const stepResponse = analysisResults.stepResponseMetrics[axis];
-          const { overshoot, settlingTime, riseTime, dampingRatio, oscillationFreq, decayRate } = stepResponse;
-          
-          // Optimal damping ratio for quadcopter - around 0.6-0.7
-          const optimalDampingRatio = 0.65;
-          
-          // D-term adjustment factors
-          let dCorrection = 1.0; // Default no change
-          
-          // 1. Correction based on damping ratio
-          if (dampingRatio > 0) {
-            if (dampingRatio < optimalDampingRatio - 0.15) {
-              // Insufficient damping: increase D
-              dCorrection *= 1.15 + (0.05 * ((optimalDampingRatio - dampingRatio) / 0.15));
-              
-              recommendations.explanations.pid[`${axis}_d_damping`] = 
-                `D term increased due to insufficient damping (${dampingRatio.toFixed(2)}).`;
-            } else if (dampingRatio > optimalDampingRatio + 0.15) {
-              // Excessive damping: decrease D
-              dCorrection *= 0.9 - (0.05 * ((dampingRatio - optimalDampingRatio) / 0.15));
-              
-              recommendations.explanations.pid[`${axis}_d_damping`] = 
-                `D term decreased due to excessive damping (${dampingRatio.toFixed(2)}).`;
-            }
-          }
-          
-          // 2. Correction based on amplitude decay rate
-          if (decayRate > 0) {
-            const optimalDecayRate = 50; // Ideal decay rate value (%)
-            
-            if (decayRate < optimalDecayRate * 0.7) {
-              // Too slow damping: increase D
-              dCorrection *= 1.1;
-              
-              recommendations.explanations.pid[`${axis}_d_decay`] = 
-                `D term increased due to slow oscillation decay (${decayRate.toFixed(1)}%/period).`;
-            } else if (decayRate > optimalDecayRate * 1.5) {
-              // Too fast damping: decrease D
-              dCorrection *= 0.95;
-              
-              recommendations.explanations.pid[`${axis}_d_decay`] = 
-                `D term decreased due to too fast decay (${decayRate.toFixed(1)}%/period).`;
-            }
-          }
-          
-          // 3. Correction based on overshoot (with lower weight)
-          if (overshoot > 25) {
-            dCorrection *= 1.05;
-            
-            recommendations.explanations.pid[`${axis}_d_overshoot`] = 
-              `D term increased due to high overshoot (${overshoot.toFixed(1)}%).`;
-          } else if (overshoot < 5) {
-            dCorrection *= 0.95;
-            
-            recommendations.explanations.pid[`${axis}_d_overshoot`] = 
-              `D term decreased due to low overshoot (${overshoot.toFixed(1)}%).`;
-          }
-          
-          // 4. Correction based on oscillation frequency
-          if (oscillationFreq > 0) {
-            if (oscillationFreq > 30) {
-              // High frequency oscillations may need lower D
-              dCorrection *= 0.95;
-              
-              recommendations.explanations.pid[`${axis}_d_freq`] = 
-                `D term decreased due to high frequency oscillations (${oscillationFreq.toFixed(1)} Hz).`;
-            }
-          }
-          
-          // Limit maximum D change to avoid drastic shifts
-          dCorrection = Math.max(0.8, Math.min(dCorrection, 1.3));
-          
-          // Apply correction with rounding
-          recommendations.pid[axis].d = Math.round(currentPid[axis].d * dCorrection);
-          
-          // General explanation
-          recommendations.explanations.pid[`${axis}_d_summary`] = 
-            `D term ${recommendations.pid[axis].d > currentPid[axis].d ? 'increased' : 'decreased'} to ${recommendations.pid[axis].d} ` +
-            `(was ${currentPid[axis].d}) based on damping analysis: ` +
-            `damping ratio=${dampingRatio ? dampingRatio.toFixed(2) : 'n/a'}, ` +
-            `decay rate=${decayRate ? decayRate.toFixed(1) : 'n/a'}%/period, ` +
-            `frequency=${oscillationFreq ? oscillationFreq.toFixed(1) : 'n/a'} Hz`;
-        }
-      }
-    }
-    
-    // 3. Harmonic analysis and further PID corrections
-    if (analysisResults.harmonicAnalysis) {
-      for (const axis of ['roll', 'pitch', 'yaw']) {
-        if (analysisResults.harmonicAnalysis[axis]) {
-          const {thd, oscillationDetected} = analysisResults.harmonicAnalysis[axis];
-          
-          // Correction when unwanted oscillations detected
-          if (oscillationDetected) {
-            // Decrease P and D when oscillations present
-            const currentP = recommendations.pid[axis].p;
-            const currentD = recommendations.pid[axis].d;
-            
-            recommendations.pid[axis].p = Math.round(currentP * 0.92);
-            recommendations.pid[axis].d = Math.round(currentD * 0.92);
-            
-            recommendations.explanations.pid[`${axis}_oscillation`] = 
-              `P and D terms reduced due to detected unwanted oscillations (THD=${thd.toFixed(1)}%).`;
-          }
-          
-          // Additional correction based on THD
-          if (thd > 40) {
-            // High THD indicates nonlinearity, decrease P
-            const currentP = recommendations.pid[axis].p;
-            recommendations.pid[axis].p = Math.round(currentP * 0.95);
-            
-            recommendations.explanations.pid[`${axis}_thd`] = 
-              `P term reduced due to high harmonic distortion (THD=${thd.toFixed(1)}%).`;
-          }
-        }
-      }
-      
-      // Axis interaction analysis
-      if (analysisResults.harmonicAnalysis.axisInteractions) {
-        const interactions = analysisResults.harmonicAnalysis.axisInteractions;
-        
-        // Find strong couplings between axes
-        const strongCouplings = [];
-        for (const [axes, data] of Object.entries(interactions)) {
-          if (data.couplingStrength > 0.6) {
-            strongCouplings.push({
-              axes: axes.split('_'),
-              strength: data.couplingStrength,
-              correlation: data.correlation,
-              phaseRelation: data.phaseRelation
-            });
-          }
-        }
-        
-        // Analyze oscillation propagation
-        if (analysisResults.harmonicAnalysis.oscillationPropagation) {
-          const propagation = analysisResults.harmonicAnalysis.oscillationPropagation;
-          
-          // Find main oscillation sources
-          const mainSources = {};
-          
-          for (const prop of propagation) {
-            if (prop.sourceAxis) {
-              mainSources[prop.sourceAxis] = (mainSources[prop.sourceAxis] || 0) + 1;
-            }
-          }
-          
-          // Formulate recommendations based on oscillation sources
-          const sourcesEntries = Object.entries(mainSources);
-          if (sourcesEntries.length > 0) {
-            // Sort by count of instances where axis is source
-            sourcesEntries.sort((a, b) => b[1] - a[1]);
-            const primarySource = sourcesEntries[0][0];
-            
-            // Add explanation about main oscillation source
-            recommendations.explanations.interactions.primary_source = 
-              `Primary oscillation source: ${primarySource}. ` +
-              `Focus on tuning PIDs for this axis is recommended.`;
-            
-            // Adjust PIDs for primary oscillation source
-            if (recommendations.pid[primarySource]) {
-              // Cautiously decrease P and D to reduce oscillation propagation
-              const currentP = recommendations.pid[primarySource].p;
-              const currentD = recommendations.pid[primarySource].d;
-              
-              recommendations.pid[primarySource].p = Math.round(currentP * 0.95);
-              recommendations.pid[primarySource].d = Math.round(currentD * 0.97);
-              
-              recommendations.explanations.interactions[`${primarySource}_source_correction`] = 
-                `Reduced P and D for ${primarySource} axis as it is the primary oscillation source.`;
-            }
-          }
-        }
-        
-        // Formulate recommendations based on strong couplings
-        if (strongCouplings.length > 0) {
-          recommendations.explanations.interactions.strong_couplings = 
-            `Strong axis couplings detected: ` +
-            strongCouplings.map(c => 
-              `${c.axes[0]}-${c.axes[1]} (strength: ${(c.strength * 100).toFixed(0)}%)`
-            ).join(', ');
-          
-          // If strong coupling between roll and pitch, adjust settings
-          const rollPitchCoupling = strongCouplings.find(
-            c => (c.axes.includes('roll') && c.axes.includes('pitch'))
-          );
-          
-          if (rollPitchCoupling && rollPitchCoupling.strength > 0.7) {
-            // Adjust parameters for both axes for better balance
-            recommendations.explanations.interactions.roll_pitch = 
-              `Strong coupling between roll and pitch (${(rollPitchCoupling.strength * 100).toFixed(0)}%). ` +
-              `PID balancing for these axes is recommended.`;
-            
-            // Balance D-term between axes to reduce shared oscillations
-            const avgD = Math.round(
-              (recommendations.pid.roll.d + recommendations.pid.pitch.d) / 2
-            );
-            
-            recommendations.pid.roll.d = avgD;
-            recommendations.pid.pitch.d = avgD;
-            
-            recommendations.explanations.interactions.roll_pitch_d_balance = 
-              `D terms for roll and pitch balanced to ${avgD} to reduce mutual oscillations.`;
-          }
-        }
-      }
-    }
-    
-    // 4. Filter recommendations
-    if (analysisResults.filterAnalysis) {
-      // Gyro filters
-      if (analysisResults.filterAnalysis.gyroFilters) {
-        const {recommendedFrequency, effectiveness} = analysisResults.filterAnalysis.gyroFilters;
-        
-        // Recommend new gyro filter frequency
-        if (recommendedFrequency > 0) {
-          recommendations.filters.gyro_lowpass_hz = recommendedFrequency;
-          
-          recommendations.explanations.filters.gyro_lowpass = 
-            `Gyro filter frequency recommended ${recommendedFrequency} Hz ` +
-            `(was ${currentFilters.gyro_lowpass_hz} Hz).`;
-        } else {
-          recommendations.filters.gyro_lowpass_hz = currentFilters.gyro_lowpass_hz;
-        }
-      }
-      
-      // D-term filters
-      if (analysisResults.filterAnalysis.dtermFilters) {
-        const {recommendedFrequency} = analysisResults.filterAnalysis.dtermFilters;
-        
-        // Recommend new D-term filter frequency
-        if (recommendedFrequency > 0) {
-          recommendations.filters.dterm_lowpass_hz = recommendedFrequency;
-          
-          recommendations.explanations.filters.dterm_lowpass = 
-            `D-term filter frequency recommended ${recommendedFrequency} Hz ` +
-            `(was ${currentFilters.dterm_lowpass_hz} Hz).`;
-        } else {
-          recommendations.filters.dterm_lowpass_hz = currentFilters.dterm_lowpass_hz;
-        }
-      }
-      
-      // Notch filters with adaptive Q-factor
-      if (analysisResults.filterAnalysis.notchFilters) {
-        const { identifiedNoiseFrequencies, classifiedNoises, recommendedQFactors } = 
-          analysisResults.filterAnalysis.notchFilters;
-        
-        if (identifiedNoiseFrequencies.length > 0) {
-          // Find minimum and maximum noise frequencies
-          const minFreq = Math.floor(Math.max(10, identifiedNoiseFrequencies.reduce(
-            (min, noise) => Math.min(min, noise.frequency), 1000
-          )));
-          
-          const maxFreq = Math.ceil(Math.min(500, identifiedNoiseFrequencies.reduce(
-            (max, noise) => Math.max(max, noise.frequency), 0
-          )));
-          
-          // Recommend range for notch filters
-          recommendations.filters.dyn_notch_min_hz = minFreq;
-          recommendations.filters.dyn_notch_max_hz = maxFreq;
-          
-          // Recommend number of notch filters based on detected noises
-          recommendations.filters.dyn_notch_count = Math.min(5, Math.max(3, identifiedNoiseFrequencies.length));
-          
-          // Recommend adaptive Q-factors if classification available
-          if (classifiedNoises && classifiedNoises.length > 0) {
-            // Select top-N noises for filtering
-            const topNoises = classifiedNoises
-              .sort((a, b) => b.magnitude - a.magnitude)
-              .slice(0, recommendations.filters.dyn_notch_count);
-            
-            // Form array of recommended Q-factors for each noise
-            recommendations.filters.dynamic_notch_q_factors = topNoises.map(noise => ({
-              frequency: noise.frequency,
-              q_factor: noise.recommendedQ,
-              noise_class: noise.noiseClass
-            }));
-            
-            // Average Q-factor for compatibility
-            recommendations.filters.dyn_notch_q = recommendedQFactors
-              ? recommendedQFactors.average
-              : 250;
-            
-            // Add explanation for adaptive Q-factors
-            recommendations.explanations.filters.notch_q_factors = 
-              `Adaptive Q-factors for different noise types: ` +
-              topNoises.map(noise => 
-                `${noise.frequency.toFixed(1)} Hz: Q=${noise.recommendedQ} (${noise.noiseClass})`
-              ).join(', ');
-          } else {
-            // Standard Q-factor
-            recommendations.filters.dyn_notch_q = 250;
-          }
-          
-          // Add general explanation for notch filters
-          recommendations.explanations.filters.notch = 
-            `Notch filters: count=${recommendations.filters.dyn_notch_count}, ` +
-            `range=${recommendations.filters.dyn_notch_min_hz}-${recommendations.filters.dyn_notch_max_hz} Hz, ` +
-            `average Q=${recommendations.filters.dyn_notch_q}.`;
-          
-        } else {
-          // Use current settings if no noises detected
-          recommendations.filters.dyn_notch_min_hz = currentFilters.dyn_notch_min_hz;
-          recommendations.filters.dyn_notch_max_hz = currentFilters.dyn_notch_max_hz;
-          recommendations.filters.dyn_notch_count = currentFilters.dyn_notch_count;
-          recommendations.filters.dyn_notch_q = currentFilters.dyn_notch_q;
-        }
-      }
-    }
-    
-    // Generate CLI commands for Betaflight
-    const commands = [];
-    
-    // PID commands
-    commands.push('# PID settings');
-    commands.push(`set p_roll = ${recommendations.pid.roll.p}`);
-    commands.push(`set i_roll = ${recommendations.pid.roll.i}`);
-    commands.push(`set d_roll = ${recommendations.pid.roll.d}`);
-    
-    commands.push(`set p_pitch = ${recommendations.pid.pitch.p}`);
-    commands.push(`set i_pitch = ${recommendations.pid.pitch.i}`);
-    commands.push(`set d_pitch = ${recommendations.pid.pitch.d}`);
-    
-    commands.push(`set p_yaw = ${recommendations.pid.yaw.p}`);
-    commands.push(`set i_yaw = ${recommendations.pid.yaw.i}`);
-    commands.push(`set d_yaw = ${recommendations.pid.yaw.d}`);
-    
-    if (recommendations.pid.roll.f) {
-      commands.push(`set f_roll = ${recommendations.pid.roll.f}`);
-    }
-    if (recommendations.pid.pitch.f) {
-      commands.push(`set f_pitch = ${recommendations.pid.pitch.f}`);
-    }
-    if (recommendations.pid.yaw.f) {
-      commands.push(`set f_yaw = ${recommendations.pid.yaw.f}`);
-    }
-    
-    // Filter commands
-    commands.push('# Filter settings');
-    commands.push(`set gyro_lowpass_hz = ${recommendations.filters.gyro_lowpass_hz}`);
-    commands.push(`set dterm_lowpass_hz = ${recommendations.filters.dterm_lowpass_hz}`);
-    commands.push(`set dyn_notch_count = ${recommendations.filters.dyn_notch_count}`);
-    commands.push(`set dyn_notch_q = ${recommendations.filters.dyn_notch_q}`);
-    commands.push(`set dyn_notch_min_hz = ${recommendations.filters.dyn_notch_min_hz}`);
-    commands.push(`set dyn_notch_max_hz = ${recommendations.filters.dyn_notch_max_hz}`);
-    
-    // Additional commands for Betaflight 4.3+ with different Q-factor support
-    if (recommendations.filters.dynamic_notch_q_factors && 
-        recommendations.filters.dynamic_notch_q_factors.length > 0) {
-      commands.push('# Additional commands for Betaflight 4.3+ (individual Q-factors)');
-      for (let i = 0; i < Math.min(recommendations.filters.dyn_notch_count, 
-                                recommendations.filters.dynamic_notch_q_factors.length); i++) {
-        const qFactor = recommendations.filters.dynamic_notch_q_factors[i];
-        commands.push(`set dyn_notch_q_${i+1} = ${qFactor.q_factor} # For frequency ~${qFactor.frequency.toFixed(1)} Hz`);
-      }
-    }
-    
-    // Save settings
-    commands.push('save');
-    
-    recommendations.betaflightCommands = commands;
-  } catch (err) {
-    console.error("Error generating improved recommendations:", err);
-  }
-  
-  return recommendations;
-};

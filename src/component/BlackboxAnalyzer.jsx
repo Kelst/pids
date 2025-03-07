@@ -31,6 +31,9 @@ const BlackboxAnalyzer = () => {
     memoryUsage: {}
   });
 
+  // Додаємо стан для режиму аналізу
+  const [analysisMode, setAnalysisMode] = useState('standard');
+
   // Функція аналізу даних
   const analyzeData = async () => {
     if (!flightData || flightData.length === 0) {
@@ -55,6 +58,7 @@ const BlackboxAnalyzer = () => {
 
       // Виводимо інформацію про розмір даних
       console.log(`Starting analysis of ${flightData.length} data rows (full dataset)`);
+      console.log(`Analysis mode: ${analysisMode}`);
 
       // Всі кроки аналізу з обробкою помилок для кожного кроку
       const steps = [
@@ -101,9 +105,9 @@ const BlackboxAnalyzer = () => {
           await new Promise(resolve => setTimeout(resolve, 100));
           
           // Примусове очищення пам'яті
-          if (global.gc) {
-            global.gc();
-          }
+        //   if (global.gc) {
+        //     global.gc();
+        //   }
         } catch (stepError) {
           console.error(`Error in step ${step.name}:`, stepError);
           setError(`Помилка у кроці ${step.name}: ${stepError.message}`);
@@ -116,9 +120,9 @@ const BlackboxAnalyzer = () => {
 
       // Генеруємо рекомендації на основі результатів аналізу
       try {
-        console.log('Generating recommendations based on full dataset analysis');
+        console.log(`Generating recommendations based on full dataset analysis with mode: ${analysisMode}`);
         const recommendStartTime = performance.now();
-        const generatedRecommendations = generateRecommendations(results, metadata);
+        const generatedRecommendations = generateRecommendations(results, metadata, analysisMode);
         const recommendEndTime = performance.now();
         processingTimes['Recommendations'] = (recommendEndTime - recommendStartTime) / 1000;
         
@@ -174,7 +178,7 @@ const BlackboxAnalyzer = () => {
           <div className="flex">
             <div className="flex-shrink-0">
               <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2h-1V9a1 1 0 00-1-1H9z" clipRule="evenodd" />
               </svg>
             </div>
             <div className="ml-3">
@@ -186,6 +190,44 @@ const BlackboxAnalyzer = () => {
         </div>
       ) : (
         <>
+          {/* Вибір режиму аналізу */}
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">Режим аналізу:</label>
+            <div className="flex space-x-4">
+              <div className="flex items-center">
+                <input
+                  id="mode-standard"
+                  name="analysis-mode"
+                  type="radio"
+                  checked={analysisMode === 'standard'}
+                  onChange={() => setAnalysisMode('standard')}
+                  className="h-4 w-4 text-blue-600"
+                />
+                <label htmlFor="mode-standard" className="ml-2 block text-sm text-gray-700">
+                  Стандартний режим
+                </label>
+              </div>
+              <div className="flex items-center">
+                <input
+                  id="mode-cinematic"
+                  name="analysis-mode"
+                  type="radio"
+                  checked={analysisMode === 'cinematic'}
+                  onChange={() => setAnalysisMode('cinematic')}
+                  className="h-4 w-4 text-blue-600"
+                />
+                <label htmlFor="mode-cinematic" className="ml-2 block text-sm text-gray-700">
+                  Режим відеозйомки
+                </label>
+              </div>
+            </div>
+            {analysisMode === 'cinematic' && (
+              <div className="mt-2 p-2 bg-blue-50 text-sm text-blue-700 rounded">
+                Режим відеозйомки оптимізує PID і фільтри для плавного польоту, зменшення вібрацій та запобігання перегріву моторів.
+              </div>
+            )}
+          </div>
+
           {/* Кнопка аналізу */}
           <div className="mb-6">
             <button
@@ -203,7 +245,6 @@ const BlackboxAnalyzer = () => {
               Аналіз повного набору даних може зайняти до кількох хвилин, залежно від обсягу даних ({flightData.length.toLocaleString()} записів).
             </p>
           </div>
-
           {/* Індикатор прогресу */}
           {analyzing && (
             <div className="mb-6">
