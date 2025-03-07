@@ -41,6 +41,8 @@ const SettingsSimulator = ({ currentSettings, recommendations, metadata }) => {
   const rendererRef = useRef(null);
   const droneRef = useRef(null);
   const animationFrameRef = useRef(null);
+  // Add a control ref to track if the DOM element has been initialized
+  const controlsRef = useRef(null);
 
   // Initialize simulated settings with recommended values
   useEffect(() => {
@@ -54,9 +56,19 @@ const SettingsSimulator = ({ currentSettings, recommendations, metadata }) => {
 
   // Initialize charts when component mounts or settings change
   useEffect(() => {
-    if (stepResponseChartRef.current || filterResponseChartRef.current || 
-        vibrationsChartRef.current || droneSimRef.current) {
-      initializeCharts();
+    if (stepResponseChartRef.current && activeTab === 'step-response') {
+      createStepResponseChart();
+    }
+    
+    if (filterResponseChartRef.current && activeTab === 'filters') {
+      createFilterResponseChart();
+    }
+    
+    if (vibrationsChartRef.current && activeTab === 'vibrations') {
+      createVibrationsChart();
+    }
+    
+    if (droneSimRef.current && activeTab === 'simulation') {
       initializeDroneSimulation();
     }
     
@@ -76,309 +88,18 @@ const SettingsSimulator = ({ currentSettings, recommendations, metadata }) => {
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current);
       }
-      if (rendererRef.current && droneSimRef.current) {
-        droneSimRef.current.removeChild(rendererRef.current.domElement);
-      }
     };
-  }, [simulatedSettings, activePidAxis]);
-
-  // Function to initialize charts
-  const initializeCharts = () => {
-    if (!recommendations) return;
-    
-    // Create or update step response chart
-    if (stepResponseChartRef.current) {
-      createStepResponseChart();
-    }
-    
-    // Create or update filter response chart
-    if (filterResponseChartRef.current) {
-      createFilterResponseChart();
-    }
-    
-    // Create or update vibrations chart
-    if (vibrationsChartRef.current) {
-      createVibrationsChart();
-    }
-  };
-
-  // Function to create step response chart
-  const createStepResponseChart = () => {
-    // Cleanup previous chart if exists
-    if (stepResponseChartInstance.current) {
-      stepResponseChartInstance.current.destroy();
-    }
-    
-    // Generate step response data based on PID values
-    const currentData = generateStepResponseData(
-      currentSettings?.pid[activePidAxis].p || 0,
-      currentSettings?.pid[activePidAxis].i || 0,
-      currentSettings?.pid[activePidAxis].d || 0
-    );
-    
-    const simulatedData = generateStepResponseData(
-      simulatedSettings.pid[activePidAxis].p,
-      simulatedSettings.pid[activePidAxis].i,
-      simulatedSettings.pid[activePidAxis].d
-    );
-    
-    // Create the chart
-    const ctx = stepResponseChartRef.current.getContext('2d');
-    stepResponseChartInstance.current = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: Array.from({ length: 100 }, (_, i) => i),
-        datasets: [
-          {
-            label: 'Setpoint',
-            data: Array(100).fill(100),
-            borderColor: 'rgb(0, 0, 0)',
-            borderDash: [5, 5],
-            borderWidth: 1,
-            pointRadius: 0
-          },
-          {
-            label: 'Current Settings',
-            data: currentData,
-            borderColor: 'rgb(128, 128, 128)',
-            borderWidth: 2,
-            pointRadius: 0
-          },
-          {
-            label: 'Simulated Settings',
-            data: simulatedData,
-            borderColor: 'rgb(54, 162, 235)',
-            borderWidth: 2,
-            pointRadius: 0
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          title: {
-            display: true,
-            text: `${activePidAxis.toUpperCase()} Axis Step Response`
-          },
-          tooltip: {
-            mode: 'index',
-            intersect: false
-          }
-        },
-        scales: {
-          x: {
-            title: {
-              display: true,
-              text: 'Time (ms)'
-            }
-          },
-          y: {
-            title: {
-              display: true,
-              text: 'Response'
-            },
-            min: 0,
-            max: 160
-          }
-        }
-      }
-    });
-  };
-
-  // Function to create filter response chart
-  const createFilterResponseChart = () => {
-    // Cleanup previous chart if exists
-    if (filterResponseChartInstance.current) {
-      filterResponseChartInstance.current.destroy();
-    }
-    
-    // Generate filter response data
-    const frequencyRange = Array.from({ length: 100 }, (_, i) => i * 5); // 0-500Hz
-    
-    const currentGyroResponse = generateFilterResponse(
-      currentSettings?.filters.gyro_lowpass_hz || 100
-    );
-    
-    const simulatedGyroResponse = generateFilterResponse(
-      simulatedSettings.filters.gyro_lowpass_hz
-    );
-    
-    const currentDtermResponse = generateFilterResponse(
-      currentSettings?.filters.dterm_lowpass_hz || 100,
-      0.2
-    );
-    
-    const simulatedDtermResponse = generateFilterResponse(
-      simulatedSettings.filters.dterm_lowpass_hz,
-      0.2
-    );
-    
-    // Create the chart
-    const ctx = filterResponseChartRef.current.getContext('2d');
-    filterResponseChartInstance.current = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: frequencyRange,
-        datasets: [
-          {
-            label: 'Current Gyro Filter',
-            data: currentGyroResponse,
-            borderColor: 'rgb(128, 128, 128)',
-            borderWidth: 2,
-            pointRadius: 0
-          },
-          {
-            label: 'Simulated Gyro Filter',
-            data: simulatedGyroResponse,
-            borderColor: 'rgb(54, 162, 235)',
-            borderWidth: 2,
-            pointRadius: 0
-          },
-          {
-            label: 'Current D-term Filter',
-            data: currentDtermResponse,
-            borderColor: 'rgb(170, 170, 170)',
-            borderDash: [5, 5],
-            borderWidth: 2,
-            pointRadius: 0
-          },
-          {
-            label: 'Simulated D-term Filter',
-            data: simulatedDtermResponse,
-            borderColor: 'rgb(99, 207, 255)',
-            borderDash: [5, 5],
-            borderWidth: 2,
-            pointRadius: 0
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          title: {
-            display: true,
-            text: 'Filter Frequency Response'
-          },
-          tooltip: {
-            mode: 'index',
-            intersect: false
-          }
-        },
-        scales: {
-          x: {
-            title: {
-              display: true,
-              text: 'Frequency (Hz)'
-            }
-          },
-          y: {
-            title: {
-              display: true,
-              text: 'Magnitude'
-            },
-            min: 0,
-            max: 1
-          }
-        }
-      }
-    });
-  };
-
-  // Function to create vibrations chart
-  const createVibrationsChart = () => {
-    // Cleanup previous chart if exists
-    if (vibrationsChartInstance.current) {
-      vibrationsChartInstance.current.destroy();
-    }
-    
-    // Generate expected vibration data based on all settings
-    const frequencyRange = Array.from({ length: 50 }, (_, i) => i * 10); // 0-500Hz
-    
-    const currentVibrations = generateVibrationProfile(
-      currentSettings?.pid[activePidAxis].p || 0,
-      currentSettings?.pid[activePidAxis].d || 0,
-      currentSettings?.filters.gyro_lowpass_hz || 100,
-      currentSettings?.filters.dterm_lowpass_hz || 100,
-      currentSettings?.filters.dyn_notch_q || 250
-    );
-    
-    const simulatedVibrations = generateVibrationProfile(
-      simulatedSettings.pid[activePidAxis].p,
-      simulatedSettings.pid[activePidAxis].d,
-      simulatedSettings.filters.gyro_lowpass_hz,
-      simulatedSettings.filters.dterm_lowpass_hz,
-      simulatedSettings.filters.dyn_notch_q
-    );
-    
-    // Create the chart
-    const ctx = vibrationsChartRef.current.getContext('2d');
-    vibrationsChartInstance.current = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: frequencyRange,
-        datasets: [
-          {
-            label: 'Current Vibration Profile',
-            data: currentVibrations,
-            borderColor: 'rgb(128, 128, 128)',
-            backgroundColor: 'rgba(128, 128, 128, 0.2)',
-            fill: true,
-            borderWidth: 2,
-            pointRadius: 0
-          },
-          {
-            label: 'Simulated Vibration Profile',
-            data: simulatedVibrations,
-            borderColor: 'rgb(54, 162, 235)',
-            backgroundColor: 'rgba(54, 162, 235, 0.2)',
-            fill: true,
-            borderWidth: 2,
-            pointRadius: 0
-          }
-        ]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          title: {
-            display: true,
-            text: `${activePidAxis.toUpperCase()} Axis Vibration Profile`
-          },
-          tooltip: {
-            mode: 'index',
-            intersect: false
-          }
-        },
-        scales: {
-          x: {
-            title: {
-              display: true,
-              text: 'Frequency (Hz)'
-            }
-          },
-          y: {
-            title: {
-              display: true,
-              text: 'Amplitude'
-            },
-            min: 0
-          }
-        }
-      }
-    });
-  };
+  }, [simulatedSettings, activePidAxis, activeTab]);
 
   // Function to initialize 3D drone simulation
   const initializeDroneSimulation = () => {
     if (!droneSimRef.current) return;
     
-    // Clean up previous simulation
-    if (rendererRef.current) {
+    // Clean up previous simulation - FIX: Only try to remove if the renderer was actually added
+    if (rendererRef.current && rendererRef.current.domElement && rendererRef.current.domElement.parentNode === droneSimRef.current) {
       droneSimRef.current.removeChild(rendererRef.current.domElement);
     }
+    
     if (animationFrameRef.current) {
       cancelAnimationFrame(animationFrameRef.current);
     }
@@ -415,6 +136,7 @@ const SettingsSimulator = ({ currentSettings, recommendations, metadata }) => {
     // Create controls
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controlsRef.current = controls;
     
     // Create drone model
     createDroneModel(scene);
@@ -472,7 +194,10 @@ const SettingsSimulator = ({ currentSettings, recommendations, metadata }) => {
         }
       }
       
-      controls.update();
+      if (controlsRef.current) {
+        controlsRef.current.update();
+      }
+      
       renderer.render(scene, camera);
       animationFrameRef.current = requestAnimationFrame(animate);
     };
@@ -571,6 +296,275 @@ const SettingsSimulator = ({ currentSettings, recommendations, metadata }) => {
     
     // Add drone to scene
     scene.add(drone);
+  };
+
+  // Function to create step response chart
+  const createStepResponseChart = () => {
+    // Cleanup previous chart if exists
+    if (stepResponseChartInstance.current) {
+      stepResponseChartInstance.current.destroy();
+    }
+    
+    // Generate step response data based on PID values
+    const currentData = generateStepResponseData(
+      currentSettings?.pid[activePidAxis]?.p || 0,
+      currentSettings?.pid[activePidAxis]?.i || 0,
+      currentSettings?.pid[activePidAxis]?.d || 0
+    );
+    
+    const simulatedData = generateStepResponseData(
+      simulatedSettings.pid[activePidAxis].p,
+      simulatedSettings.pid[activePidAxis].i,
+      simulatedSettings.pid[activePidAxis].d
+    );
+    
+    // Create the chart
+    const ctx = stepResponseChartRef.current.getContext('2d');
+    stepResponseChartInstance.current = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: Array.from({ length: 100 }, (_, i) => i),
+        datasets: [
+          {
+            label: 'Setpoint',
+            data: Array(100).fill(100),
+            borderColor: 'rgb(0, 0, 0)',
+            borderDash: [5, 5],
+            borderWidth: 1,
+            pointRadius: 0
+          },
+          {
+            label: 'Current Settings',
+            data: currentData,
+            borderColor: 'rgb(128, 128, 128)',
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Simulated Settings',
+            data: simulatedData,
+            borderColor: 'rgb(54, 162, 235)',
+            borderWidth: 2,
+            pointRadius: 0
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          title: {
+            display: true,
+            text: `${activePidAxis.toUpperCase()} Axis Step Response`
+          },
+          tooltip: {
+            mode: 'index',
+            intersect: false
+          }
+        },
+        scales: {
+          x: {
+            title: {
+              display: true,
+              text: 'Time (ms)'
+            }
+          },
+          y: {
+            title: {
+              display: true,
+              text: 'Response'
+            },
+            min: 0,
+            max: 160
+          }
+        }
+      }
+    });
+  };
+
+  // Function to create filter response chart
+  const createFilterResponseChart = () => {
+    // Cleanup previous chart if exists
+    if (filterResponseChartInstance.current) {
+      filterResponseChartInstance.current.destroy();
+    }
+    
+    // Generate filter response data
+    const frequencyRange = Array.from({ length: 100 }, (_, i) => i * 5); // 0-500Hz
+    
+    const currentGyroResponse = generateFilterResponse(
+      currentSettings?.filters?.gyro_lowpass_hz || 100
+    );
+    
+    const simulatedGyroResponse = generateFilterResponse(
+      simulatedSettings.filters.gyro_lowpass_hz
+    );
+    
+    const currentDtermResponse = generateFilterResponse(
+      currentSettings?.filters?.dterm_lowpass_hz || 100,
+      0.2
+    );
+    
+    const simulatedDtermResponse = generateFilterResponse(
+      simulatedSettings.filters.dterm_lowpass_hz,
+      0.2
+    );
+    
+    // Create the chart
+    const ctx = filterResponseChartRef.current.getContext('2d');
+    filterResponseChartInstance.current = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: frequencyRange,
+        datasets: [
+          {
+            label: 'Current Gyro Filter',
+            data: currentGyroResponse,
+            borderColor: 'rgb(128, 128, 128)',
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Simulated Gyro Filter',
+            data: simulatedGyroResponse,
+            borderColor: 'rgb(54, 162, 235)',
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Current D-term Filter',
+            data: currentDtermResponse,
+            borderColor: 'rgb(170, 170, 170)',
+            borderDash: [5, 5],
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Simulated D-term Filter',
+            data: simulatedDtermResponse,
+            borderColor: 'rgb(99, 207, 255)',
+            borderDash: [5, 5],
+            borderWidth: 2,
+            pointRadius: 0
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          title: {
+            display: true,
+            text: 'Filter Frequency Response'
+          },
+          tooltip: {
+            mode: 'index',
+            intersect: false
+          }
+        },
+        scales: {
+          x: {
+            title: {
+              display: true,
+              text: 'Frequency (Hz)'
+            }
+          },
+          y: {
+            title: {
+              display: true,
+              text: 'Magnitude'
+            },
+            min: 0,
+            max: 1
+          }
+        }
+      }
+    });
+  };
+
+  // Function to create vibrations chart
+  const createVibrationsChart = () => {
+    // Cleanup previous chart if exists
+    if (vibrationsChartInstance.current) {
+      vibrationsChartInstance.current.destroy();
+    }
+    
+    // Generate expected vibration data based on all settings
+    const frequencyRange = Array.from({ length: 50 }, (_, i) => i * 10); // 0-500Hz
+    
+    const currentVibrations = generateVibrationProfile(
+      currentSettings?.pid[activePidAxis]?.p || 0,
+      currentSettings?.pid[activePidAxis]?.d || 0,
+      currentSettings?.filters?.gyro_lowpass_hz || 100,
+      currentSettings?.filters?.dterm_lowpass_hz || 100,
+      currentSettings?.filters?.dyn_notch_q || 250
+    );
+    
+    const simulatedVibrations = generateVibrationProfile(
+      simulatedSettings.pid[activePidAxis].p,
+      simulatedSettings.pid[activePidAxis].d,
+      simulatedSettings.filters.gyro_lowpass_hz,
+      simulatedSettings.filters.dterm_lowpass_hz,
+      simulatedSettings.filters.dyn_notch_q
+    );
+    
+    // Create the chart
+    const ctx = vibrationsChartRef.current.getContext('2d');
+    vibrationsChartInstance.current = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: frequencyRange,
+        datasets: [
+          {
+            label: 'Current Vibration Profile',
+            data: currentVibrations,
+            borderColor: 'rgb(128, 128, 128)',
+            backgroundColor: 'rgba(128, 128, 128, 0.2)',
+            fill: true,
+            borderWidth: 2,
+            pointRadius: 0
+          },
+          {
+            label: 'Simulated Vibration Profile',
+            data: simulatedVibrations,
+            borderColor: 'rgb(54, 162, 235)',
+            backgroundColor: 'rgba(54, 162, 235, 0.2)',
+            fill: true,
+            borderWidth: 2,
+            pointRadius: 0
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          title: {
+            display: true,
+            text: `${activePidAxis.toUpperCase()} Axis Vibration Profile`
+          },
+          tooltip: {
+            mode: 'index',
+            intersect: false
+          }
+        },
+        scales: {
+          x: {
+            title: {
+              display: true,
+              text: 'Frequency (Hz)'
+            }
+          },
+          y: {
+            title: {
+              display: true,
+              text: 'Amplitude'
+            },
+            min: 0
+          }
+        }
+      }
+    });
   };
 
   // Utility function to generate step response data
@@ -791,9 +785,9 @@ const SettingsSimulator = ({ currentSettings, recommendations, metadata }) => {
   // Create performance metrics for comparison
   const getPerformanceMetrics = () => {
     const currentOvershoot = calculateOvershoot(
-      currentSettings?.pid[activePidAxis].p || 0,
-      currentSettings?.pid[activePidAxis].i || 0,
-      currentSettings?.pid[activePidAxis].d || 0
+      currentSettings?.pid[activePidAxis]?.p || 0,
+      currentSettings?.pid[activePidAxis]?.i || 0,
+      currentSettings?.pid[activePidAxis]?.d || 0
     );
     
     const simulatedOvershoot = calculateOvershoot(
@@ -803,9 +797,9 @@ const SettingsSimulator = ({ currentSettings, recommendations, metadata }) => {
     );
     
     const currentSettlingTime = calculateSettlingTime(
-      currentSettings?.pid[activePidAxis].p || 0,
-      currentSettings?.pid[activePidAxis].i || 0,
-      currentSettings?.pid[activePidAxis].d || 0
+      currentSettings?.pid[activePidAxis]?.p || 0,
+      currentSettings?.pid[activePidAxis]?.i || 0,
+      currentSettings?.pid[activePidAxis]?.d || 0
     );
     
     const simulatedSettlingTime = calculateSettlingTime(
@@ -815,9 +809,9 @@ const SettingsSimulator = ({ currentSettings, recommendations, metadata }) => {
     );
     
     const currentVibrationDamping = calculateVibrationDamping(
-      currentSettings?.pid[activePidAxis].d || 0,
-      currentSettings?.filters.gyro_lowpass_hz || 100,
-      currentSettings?.filters.dterm_lowpass_hz || 100
+      currentSettings?.pid[activePidAxis]?.d || 0,
+      currentSettings?.filters?.gyro_lowpass_hz || 100,
+      currentSettings?.filters?.dterm_lowpass_hz || 100
     );
     
     const simulatedVibrationDamping = calculateVibrationDamping(
