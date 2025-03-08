@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Line } from 'react-chartjs-2';
 import useBlackboxStore from '../store/blackboxStore';
 import _ from 'lodash';
+import Chart from 'chart.js/auto';  // Add this import
 
 const PidSimulator = () => {
   const { flightData, dataHeaders, metadata } = useBlackboxStore();

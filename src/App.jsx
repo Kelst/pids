@@ -5,6 +5,7 @@ import BlackboxSummary from './component/BlackboxSummary'
 import BlackboxAnalyzer from './component/BlackboxAnalyzer'
 import FlightVisualizer3D from './component/FlightVisualizer3D'  // Імпортуємо новий компонент
 import PidOptimizer from './component/PidOptimizer';
+import PidSimulator from './component/PidSimulator'; // Add this import
 
 function App() {
   const [activeSection, setActiveSection] = useState('viewer')
@@ -59,6 +60,16 @@ function App() {
           >
            PID Оптимізатор
           </button>
+          <button
+            onClick={() => setActiveSection('visualizer-pid')}
+            className={`mr-8 py-4 px-1 ${
+              activeSection === 'visualizer-pid'
+                ? 'border-b-2 border-blue-500 font-medium text-blue-600'
+                : 'text-gray-500 hover:text-gray-700 hover:border-gray-300'
+            }`}
+          >
+           PID Vis
+          </button>
         </nav>
       </div>
       
@@ -67,6 +78,7 @@ function App() {
       {activeSection === 'summary' && <BlackboxSummary />}
       {activeSection === 'analyzer' && <BlackboxAnalyzer />}
       {activeSection === 'visualizer' && <PidOptimizer />}
+      {activeSection === 'visualizer-pid' && <PidSimulator />}
     </div>
   )
 }
